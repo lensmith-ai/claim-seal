@@ -128,6 +128,59 @@ def judged(item_verdict, spans, why_it_matters="It matters because the bridge ca
                        "verification": {"verdict": item_verdict, "why": "", "citations": citations}}]}
 
 
+class SharedRelationReaderTests(unittest.TestCase):
+    def test_one_reader_trims_lowercases_and_maps_aliases(self):
+        from claim_seal.relations import read_relation
+        self.assertEqual(read_relation(" Suggests\n"), ("suggests", "verb"))
+        self.assertEqual(read_relation("CONTRADICTED "), ("contradicts", "alias"))
+        self.assertEqual(read_relation("stated"), ("says", "alias"))
+        self.assertEqual(read_relation("inferred"), ("implies", "alias"))
+        self.assertEqual(read_relation(None), (None, "empty"))
+        self.assertEqual(read_relation("  "), (None, "empty"))
+        self.assertEqual(read_relation("hallucinates"), (None, "unknown"))
+
+    def test_every_guard_uses_the_shared_reader(self):
+        import inspect
+        from claim_seal import evidence, spans, support
+        for module in (evidence, spans, support):
+            self.assertIn("read_relation(", inspect.getsource(module), module.__name__)
+
+
+class SentenceRelationIntakeTests(unittest.TestCase):
+    """The judge's per-sentence word goes through the same reader: an alias is read as its verb
+    (and marked); an unknown word is dropped, and that sentence carries its claim's verdict."""
+
+    DOC = {"items": [{"insight": "The bridge reopened after repairs.",
+                      "detail": ["Weekend crossings will double next month."],
+                      "sources": [{"id": "press", "ref": "Harbour bridge reopens after repairs"}]}]}
+
+    def run_word(self, word, verdict="supported"):
+        reply = {"verdicts": [{"claim": 1, "verdict": verdict, "why": "w", "relation": "says",
+                               "citation_spans": [{"citation_index": 0, "span_quote": "Weekend crossings will double",
+                                                   "span_relation": word}]}]}
+        result = judge(self.DOC, SOURCES, fixed(reply), local_placement=False)
+        span = result["brief"]["items"][0]["verification"]["citations"][0]["span"]
+        return span, line_states(result["brief"])
+
+    def test_contradicted_alias_and_padded_forms_leave_the_sentence_out(self):
+        for verdict in ("supported", "partial"):
+            for word in ("contradicted", "Contradicts ", "CONTRADICTED"):
+                span, states = self.run_word(word, verdict)
+                self.assertEqual(span["sentence_relation"], "contradicts", (word, verdict))
+                self.assertNotIn("detail[0]", {l["field"] for l in states["lines"]}, (word, verdict))
+                self.assertEqual(states["left_out"][0]["rule"], "span-contradicts")
+        span, _ = self.run_word("contradicted")
+        self.assertEqual(span["sentence_relation_alias"], "contradicted")
+        span, _ = self.run_word("contradicts")
+        self.assertNotIn("sentence_relation_alias", span)
+
+    def test_an_unknown_word_is_dropped_and_the_sentence_carries_the_claim_verdict(self):
+        span, states = self.run_word("hallucinates")
+        self.assertNotIn("sentence_relation", span)
+        line = next(l for l in states["lines"] if l["field"] == "detail[0]")
+        self.assertEqual((line["state"], line["state_scope"]), ("supported", "card"))
+
+
 class LineStateTests(unittest.TestCase):
     def states(self, doc):
         return {line["field"]: (line["state"], line["state_scope"]) for line in line_states(doc)["lines"]}
@@ -213,6 +266,22 @@ class ContradictsNeverSupportedAtClaimLevel(unittest.TestCase):
                 states = line_states(result["brief"])
                 self.assertEqual(states["lines"], [], (relation, sharded))
                 self.assertNotEqual(result["claim_evidence"]["outcomes"][0]["support_state"], "supported")
+
+    def test_the_contradicted_alias_and_padded_forms_are_caught_at_claim_level_and_on_the_page(self):
+        for verdict in ("supported", "partial"):
+            for relation in ("contradicted", "Contradicts ", "CONTRADICTED ", " contradicted\n"):
+                reply = {"verdicts": [{"claim": 1, "verdict": verdict, "why": "w", "relation": relation,
+                                       "strength": 80, "evidence_spans": [{"citation_index": 0,
+                                                                           "support_span": "reopened on Monday"}]}]}
+                for sharded in (False, True):
+                    case = (verdict, relation, sharded)
+                    result = judge(brief("Harbour bridge reopens after repairs"), SOURCES, fixed(reply),
+                                   sharded=sharded)
+                    self.assertEqual(result["brief"]["items"][0]["verification"]["verdict"], "unchecked", case)
+                    self.assertEqual(line_states(result["brief"])["lines"], [], case)
+                    row = result["claim_evidence"]["outcomes"][0]
+                    self.assertNotEqual(row["support_state"], "supported", case)
+                    self.assertEqual(row["relation"], "contradicts", case)
 
     def test_the_same_reply_with_says_is_supported(self):
         reply = {"verdicts": [{"claim": 1, "verdict": "supported", "why": "w", "relation": "says",

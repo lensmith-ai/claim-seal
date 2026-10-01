@@ -6,8 +6,8 @@
 
 check without --judge runs pass 1 only (are the cited references real?) and says so.
 verify-seal accepts a claim-evidence record, or a check result that contains one.
-Exit codes: check 0 ran, 2 bad input. verify-seal 0 all verify, 1 at least one fails,
-2 nothing to check.
+Exit codes: check 0 ran, 2 bad input. verify-seal 0 all verify, 1 at least one fails (including a
+record that has a seal but no rows, or a result whose claim_evidence is null), 2 nothing to check.
 """
 from __future__ import annotations
 
@@ -155,9 +155,18 @@ def cmd_verify_seal(args) -> int:
             print(f"UNREADABLE {path}: {type(exc).__name__}")
             failed += 1
             continue
-        record = doc.get("claim_evidence") if isinstance(doc, dict) and "claim_evidence" in doc else doc
-        if not isinstance(record, dict) or not record.get("outcomes"):
-            print(f"NOTHING    {path}: no claim-evidence outcome rows")
+        is_result = isinstance(doc, dict) and "claim_evidence" in doc
+        record = doc.get("claim_evidence") if is_result else doc
+        seal_value = (((record.get("verification") or {}).get("seal") or {}).get("value")
+                      if isinstance(record, dict) and isinstance(record.get("verification"), dict) else None)
+        if is_result and not isinstance(record, dict):
+            # A result that carries a claim_evidence slot with nothing in it lost its record.
+            checked += 1
+            failed += 1
+            print(f"CHAIN FAIL {path}: claim_evidence is {type(record).__name__}, not a sealed record")
+            continue
+        if not isinstance(record, dict) or (not record.get("outcomes") and not seal_value):
+            print(f"NOTHING    {path}: no claim-evidence outcome rows and no seal")
             continue
         checked += 1
         problem = seal_problem(record)

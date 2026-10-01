@@ -61,6 +61,28 @@ LABEL = {"supported": "supported", "partly_supported": "partly supported",
          "reading": "our reading"}
 
 
+# Coarse-axis words a judge sometimes answers with instead of a verb. Read as the verb they name,
+# but marked as an alias so a record can tell them from the judge's own verb.
+RELATION_ALIASES = {"stated": "says", "inferred": "implies", "contradicted": "contradicts"}
+
+
+def read_relation(raw: object) -> tuple[str | None, str]:
+    """The ONE reader of a judge's relation word, used by every guard so they cannot disagree.
+
+    Trims and lower-cases, then returns (verb, how):
+      (verb, "verb")       a word in the closed vocabulary
+      (verb, "alias")      stated / inferred / contradicted, read as says / implies / contradicts
+      (None, "empty")      nothing given
+      (None, "unknown")    anything else
+    """
+    word = str(raw if raw is not None else "").strip().lower()
+    if word in SPAN_RELATIONS:
+        return word, "verb"
+    if word in RELATION_ALIASES:
+        return RELATION_ALIASES[word], "alias"
+    return None, ("empty" if not word else "unknown")
+
+
 class UnknownRelation(ValueError):
     """A relation word outside the closed vocabulary."""
 

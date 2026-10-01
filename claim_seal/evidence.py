@@ -23,7 +23,7 @@ import copy
 import hashlib
 
 from .normalize import COORDINATE_SYSTEM, NORMALIZER_ID, normalize, normalizer_sha256
-from .relations import SPAN_RELATIONS, derive_coarse_relation
+from .relations import derive_coarse_relation, read_relation
 from .resolve import citation_key, claim_units, load_sources
 from .seal import CLAIM_EVIDENCE_CONTRACT, canonical, seal
 
@@ -226,15 +226,17 @@ def judged_relation_and_strength(verdict: dict) -> tuple[str, int, str]:
     would overclaim precision.
     """
     semantic = str(verdict.get("verdict") or "").lower()
-    # strip as well as lower (added in this library): the claim-level guard in support.py reads
-    # the verb the same way, so "contradicts " cannot pass one guard and fail the other.
-    relation = str(verdict.get("relation") or "").strip().lower()
+    # read_relation is shared with the claim-level guard in support.py and the per-sentence intake
+    # in spans.py (added in this library: it also trims), so "contradicts " or "contradicted"
+    # cannot pass one guard and fail another. The mapping below is the composer's.
+    relation, how = read_relation(verdict.get("relation"))
     source = "judge"
-    if relation not in SPAN_RELATIONS:
+    if how != "verb":
         source = "compat-default"
-        relation = {"stated": "says", "inferred": "implies", "contradicted": "contradicts"}.get(
-            relation, {"supported": "says", "partial": "implies"}.get(semantic, "undetermined")
-            if not relation else "undetermined")
+        if how == "empty":
+            relation = {"supported": "says", "partial": "implies"}.get(semantic, "undetermined")
+        elif how == "unknown":
+            relation = "undetermined"
     strength = verdict.get("strength")
     if not isinstance(strength, int) or isinstance(strength, bool) or not 0 <= strength <= 100:
         strength = 100 if relation == "says" else (25 if derive_coarse_relation(relation) == "inferred" else 0)

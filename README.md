@@ -49,8 +49,9 @@ the judge reads the cited text and returns:
 Then everything the model said is checked by code, fail-closed:
 
 - A span quote is kept only if it occurs **exactly once in exactly one field** of the
-  writing (the claim, its why-it-matters, or one detail; a field may hold several sentences) (case, whitespace and smart punctuation forgiven; paraphrase is not). The stored quote
-  is sliced from our text, never copied from the model's. Every span records its producer.
+  writing: the claim, its why-it-matters, or one detail (a field may hold several sentences).
+  Case, whitespace and smart punctuation are forgiven; paraphrase is not. The stored quote is
+  sliced from our text, never copied from the model's. Every span records its producer.
 - A span that lands on the thesis may move to the supporting sentence the source overlaps most
   (at least 3 shared content words and a quarter of the sentence, no ties). A moved span drops
   the judge's relation, because the judge never rated that sentence.
@@ -73,14 +74,26 @@ Claim verdicts: `supported`, `partial`, `unsupported`, `unresolved` (pass 1 foun
 | `implies` `suggests` `connotes` `follows` `explains` `posits` `illustrates` | the writing takes a step beyond the source; the verb names the step | step-beyond | "our reading" (only when that citation resolved; otherwise the sentence is left out) |
 | `contradicts` | the source disagrees | contradicts | left out, never printed; on the claim sentence itself the whole item is omitted |
 | `undetermined` | the judge did not rate it | unrated | no line state of its own |
-| anything else | | **refused** (`UnknownRelation`) | **refused** |
+| anything else | | see below | see below |
+
+Every relation word is read by one function (`read_relation`): trimmed, lower-cased, and the
+aliases `stated`, `inferred`, `contradicted` read as `says`, `implies`, `contradicts` (a sentence
+span records the alias it came from in `sentence_relation_alias`). Any other word is handled in
+two ways, depending on where it appears:
+
+- **From the judge** (a `span_relation` the judge returned): the word is **dropped** at intake.
+  The span is kept without a relation, and that sentence then carries its claim's verdict like a
+  `says` sentence. This is the composer's behaviour, kept on purpose: refusing would discard the
+  location the judge did find.
+- **In a brief handed to `line_states()`, `through_line()` or `line_rule()`** (a
+  `sentence_relation` that did not come through intake): **refused** with `UnknownRelation`.
 
 `contradicts` never comes out supported: not as a printed line (a sentence whose own relation is
 `contradicts` is left out whatever the claim verdict), not in the sealed record (a `supported`
 verdict paired with `contradicts` is recorded `unresolved`), and not as a claim verdict (a
 `supported` or `partial` verdict paired with `contradicts` is unusable: `unchecked`, so none of
-its sentences print as "supported" or "partly supported"). The verb is read trimmed and
-lower-cased everywhere, so `"contradicts "` counts.
+its sentences print as "supported" or "partly supported"). Because every guard uses the same
+reader, `"contradicts "`, `"Contradicts"` and the alias `"contradicted"` all count.
 
 ## The seal and its limits
 
@@ -93,11 +106,12 @@ chain_k = sha256(chain_{k-1} + canonical({"outcome": row_k, "stage_a_binding": b
 ```
 
 **What it covers:** the rows in `claim_evidence.outcomes`, each hashed whole: the claim it
-belongs to (by digest), the citation, the support state and its reason, every evidence span, the
-relation verb, `relation_source` (whether the judge chose the verb or it was defaulted),
-strength, corroboration and the source binding. Editing a row, upgrading a verb, appending,
-deleting or reordering rows, or relabelling a defaulted verb as the judge's own all break the
-chain, and `verify_seal()` returns False.
+belongs to (by a digest of the claim text, recorded in the row but NOT re-checked against the
+brief by `verify_seal()`, so editing a claim's text in the brief still verifies), the citation,
+the support state and its reason, every evidence span, the relation verb, `relation_source`
+(whether the judge chose the verb or it was defaulted), strength, corroboration and the source
+binding. Editing a row, upgrading a verb, appending, deleting or reordering rows, or relabelling
+a defaulted verb as the judge's own all break the chain, and `verify_seal()` returns False.
 
 **What it does not cover:** everything else in a `judge()` result. That includes the claim
 verdicts and their `why` in `result["brief"]`, the per-sentence spans with their relations and
@@ -216,7 +230,8 @@ The checking logic is the composer's. Its deployment flags became keyword argume
 registry became the plain sources format above; private identifiers were removed. Behaviour
 changes, each covered by a test: a `supported` or `partial` verdict paired with the relation
 `contradicts` is not used (claim `unchecked`; a `supported` evidence row becomes `unresolved`);
-the relation verb is trimmed before it is read; `judge()` returns an annotated copy
+every relation word is read by one shared reader (trimmed, with the `contradicted` alias) at the
+claim guard, the evidence pass and the per-sentence intake; `judge()` returns an annotated copy
 instead of editing its input; source digests are taken when sources are handed in rather than
 by an HTTP fetcher. The composer's title-lineage checks for specific feed formats, its service
 checkpoints and its per-call usage telemetry are not included.

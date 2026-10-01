@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from .relations import SPAN_RELATIONS
+from .relations import read_relation
 from .resolve import target_for_claim
 
 SPAN_CONTRACT = "citation-span/v1"
@@ -253,12 +253,17 @@ def span_receipt(report: dict, verdicts: dict, brief: dict, *, local_placement: 
         fields = span_fields(brief, claim)
         span, reason = validate_span(fields, citation, matching[0])
         if span is not None:
-            # The judge's verb for the QUOTED sentence vs this source. Whitelisted, else dropped.
-            # Attached before relocation on purpose: a RELOCATED mark sits on a sentence the judge
-            # never rated, so relocation loses the field rather than carrying a wrong rating.
+            # The judge's verb for the QUOTED sentence vs this source, read by the shared reader
+            # (an alias such as "contradicted" is read as its verb and marked); any other word is
+            # DROPPED, and the sentence then carries its claim's verdict. Attached before
+            # relocation on purpose: a RELOCATED mark sits on a sentence the judge never rated,
+            # so relocation loses the field rather than carrying a wrong rating.
             rel = matching[0].get("span_relation") if isinstance(matching[0], dict) else None
-            if isinstance(rel, str) and rel.strip().lower() in SPAN_RELATIONS:
-                span["sentence_relation"] = rel.strip().lower()
+            verb, how = read_relation(rel) if isinstance(rel, str) else (None, "unknown")
+            if verb is not None:
+                span["sentence_relation"] = verb
+                if how == "alias":
+                    span["sentence_relation_alias"] = rel.strip().lower()
             # Local placement: a validated span that landed on the THESIS may move to the
             # supporting sentence the source text most overlaps. Only a span that EXISTS is moved;
             # the support verdict stays the judge's.

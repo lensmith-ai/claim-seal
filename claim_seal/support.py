@@ -27,7 +27,7 @@ import time
 from .completion import complete_partials
 from .evidence import build_claim_evidence, capture_sources, evidence_candidates, source_lineage
 from .prompts import build_claim_prompt, build_prompt
-from .relations import SPAN_RELATIONS
+from .relations import SPAN_RELATIONS, read_relation
 from .resolve import CITATION_ROW_FIELDS, TEXT_FIELDS, load_sources, resolve, target_for_claim
 from .spans import SPAN_CONTRACT, span_fields, span_receipt
 
@@ -344,7 +344,7 @@ def verify(brief: dict, sources: dict, receipts: dict, model, *,
         any_resolved = any(x["resolution"] != "unresolved" for x in cites)
         judged = verdicts.get(n) or {}
         conflict = (judged.get("verdict") in ("supported", "partial")
-                    and str(judged.get("relation") or "").strip().lower() == "contradicts")
+                    and read_relation(judged.get("relation"))[0] == "contradicts")
         if not cites or not any_resolved:
             v = {"verdict": "unresolved",
                  "why": "no cited reference matched anything in the given sources"}

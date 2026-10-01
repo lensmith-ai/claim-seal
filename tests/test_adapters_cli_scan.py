@@ -153,6 +153,7 @@ class DemoTests(unittest.TestCase):
             doc["brief"]["items"][2]["verification"]["verdict"] = "supported"
             doc["brief"]["items"][1]["verification"]["citations"][1]["span"]["sentence_relation"] = "says"
             doc["claim_evidence"]["verification"]["rule_ids"] = []
+            doc["brief"]["items"][0]["insight"] = "Edited claim text: the row's claim digest is not re-checked."
             with open(out, "w", encoding="utf-8") as h:
                 json.dump(doc, h)
             code, text = run_cli("verify-seal", out)
@@ -160,6 +161,30 @@ class DemoTests(unittest.TestCase):
         self.assertIn("claim_evidence.outcomes: 6 rows recompute", text)
         self.assertIn("(outcome, span, verb, judge-chose flag, binding)", text)
         self.assertIn("Not sealed: claim verdicts, per-sentence relations and through-line labels, rule ids", text)
+
+    def test_a_sealed_record_with_its_rows_removed_or_nulled_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            good = os.path.join(tmp, "good.json")
+            run_cli("check", BRIEF, SOURCES, "--judge", "replay:" + ANSWERS, "--out", good)
+            with open(good, encoding="utf-8") as h:
+                doc = json.load(h)
+            emptied = json.loads(json.dumps(doc))
+            emptied["claim_evidence"]["outcomes"] = []
+            dropped = json.loads(json.dumps(doc))
+            del dropped["claim_evidence"]["outcomes"]
+            nulled = dict(doc, claim_evidence=None)
+            bare = json.loads(json.dumps(doc["claim_evidence"]))
+            bare["outcomes"] = []
+            for name, variant in (("emptied", emptied), ("dropped", dropped), ("nulled", nulled),
+                                  ("bare record", bare)):
+                path = os.path.join(tmp, name + ".json")
+                with open(path, "w", encoding="utf-8") as h:
+                    json.dump(variant, h)
+                code, text = run_cli("verify-seal", path)
+                self.assertEqual(code, 1, name)
+                self.assertIn("CHAIN FAIL", text, name)
+                code, text = run_cli("verify-seal", good, path)
+                self.assertEqual(code, 1, name + " beside a good file")
 
     def test_verify_seal_with_nothing_to_check_exits_2(self):
         with tempfile.TemporaryDirectory() as tmp:
