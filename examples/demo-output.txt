@@ -1,0 +1,50 @@
+overall: unsupported    citations: 6 (exact 5, fuzzy 0, unresolved 1)
+verdicts: {"supported": 1, "partial": 1, "unsupported": 1, "unresolved": 1, "unchecked": 0}
+
+[item 1] SUPPORTED: Millbrook's library will stay open until 9 p.m. on weekdays from March.
+    why: Millbrook Town Council notice states the 9 p.m. weekday opening from March.
+    cite 0: council / 'Library hours extended from March' -> exact
+        span [why_it_matters] 'funded for one year'
+        relation: says  through line: states  (placed by model-exact-quote-v1)
+        bears: The council notice announces the later weekday closing and its one-year funding, which is the claim itself.
+    cite 1: library / 'Annual report: visits and lending' -> exact
+        span [detail[0]] 'Evening visits were already the busiest part of the day'
+        relation: says  through line: states  (placed by model-exact-quote-v1)
+        bears: The report shows visits concentrated in the evening, which supports the detail but not the new hours.
+
+[item 2] PARTIAL: Longer hours are likely to lift library visits further.
+    why: Millbrook Library annual report shows full evening rooms; that longer hours lift visits is an inference.
+    cite 0: library / 'Annual report: visits and lending' -> exact
+        span [why_it_matters] 'the extra hours meet demand rather than create it'
+        relation: implies  through line: step-beyond  (placed by model-exact-quote-v1)
+        bears: The report records crowded evenings; the brief infers that more evening hours would absorb that demand.
+    cite 1: survey / 'Survey: what residents want from the library' -> exact
+        span [detail[0]] 'Weekend demand is even stronger than evening demand.'
+        relation: contradicts  through line: contradicts  (placed by model-exact-quote-v1)
+        bears: The survey finds little appetite for weekend visits, which cuts against the detail about weekend demand.
+
+[item 3] UNSUPPORTED: Most residents asked for weekend opening rather than evenings.
+    why: Residents' survey says 61 percent wanted weekday evenings and only 9 percent weekends.
+    cite 0: survey / 'Survey: what residents want from the library' -> exact
+        span [insight] 'asked for weekend opening rather than evenings'
+        relation: contradicts  through line: contradicts  (placed by model-exact-quote-v1)
+        bears: The survey reports the opposite preference: evenings, not weekends.
+
+[item 4] UNRESOLVED: The council plans to close the branch library next year.
+    why: no cited reference matched anything in the given sources
+    cite 0: council / 'Branch library closure plan' -> unresolved
+
+what a reader-facing page may print:
+  item 1 [insight] supported (card): Millbrook's library will stay open until 9 p.m. on weekdays from March.
+  item 1 [why_it_matters] supported (card): The extension is funded for one year, so a review of visitor numbers decides whether it lasts.
+  item 1 [detail[0]] supported (card): Evening visits were already the busiest part of the day.
+  item 2 [insight] partly supported (card): Longer hours are likely to lift library visits further.
+  item 2 [why_it_matters] our reading (line): If the reading room was already full in the evening, the extra hours meet demand rather than create it.
+  item 3 omitted: verdict-not-printable
+  item 4 omitted: verdict-not-printable
+  item 2 [detail[0]] left out: span-contradicts
+
+claim-evidence rows: 6  states: {"supported": 1, "unresolved": 3, "unsupported": 1, "unknown": 1}
+seal: sha256-digest-chain/v1 0e0f273adb18c6278ff8523ed2c2a9380432c2f2cd482419eae981d6cf5d739c  (unkeyed; tamper-evident only alongside version history; not a signature)
+seal covers: the claim-evidence rows (outcome, span, verb, judge-chose flag, binding); not the verdicts, sentence relations, through-line labels or rule ids above
+seal recomputes: yes

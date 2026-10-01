@@ -1,0 +1,58 @@
+{
+  "about": "Recorded judge answers for the offline demo, keyed by claim text. The replay adapter returns these; it does not judge. Run with --judge openai to have a real model judge instead.",
+  "answers": {
+    "Millbrook's library will stay open until 9 p.m. on weekdays from March.": {
+      "verdict": "supported",
+      "why": "Source 1 states the 9 p.m. weekday opening from March.",
+      "relation": "says",
+      "strength": 95,
+      "citation_spans": [
+        {"citation_index": 0, "span_quote": "funded for one year", "span_relation": "says"},
+        {"citation_index": 1, "span_quote": "Evening visits were already the busiest part of the day", "span_relation": "says"}
+      ],
+      "evidence_spans": [
+        {"citation_index": 0, "support_span": "will open until 9 p.m. on weekdays from March"}
+      ],
+      "citation_bears": [
+        {"citation_index": 0, "how_it_bears": "The council notice announces the later weekday closing and its one-year funding, which is the claim itself."},
+        {"citation_index": 1, "how_it_bears": "The report shows visits concentrated in the evening, which supports the detail but not the new hours."}
+      ]
+    },
+    "Longer hours are likely to lift library visits further.": {
+      "verdict": "partial",
+      "why": "Source 1 shows full evening rooms; that longer hours lift visits is an inference.",
+      "relation": "suggests",
+      "strength": 40,
+      "citation_spans": [
+        {"citation_index": 0, "span_quote": "the extra hours meet demand rather than create it", "span_relation": "implies"},
+        {"citation_index": 1, "span_quote": "Weekend demand is even stronger than evening demand.", "span_relation": "contradicts"}
+      ],
+      "evidence_spans": [
+        {"citation_index": 0, "support_span": "the reading room was often full after 6 p.m."}
+      ],
+      "citation_bears": [
+        {"citation_index": 0, "how_it_bears": "The report records crowded evenings; the brief infers that more evening hours would absorb that demand."},
+        {"citation_index": 1, "how_it_bears": "The survey finds little appetite for weekend visits, which cuts against the detail about weekend demand."}
+      ]
+    },
+    "Most residents asked for weekend opening rather than evenings.": {
+      "verdict": "unsupported",
+      "why": "Source 1 says 61 percent wanted weekday evenings and only 9 percent weekends.",
+      "relation": "contradicts",
+      "strength": 5,
+      "citation_spans": [
+        {"citation_index": 0, "span_quote": "asked for weekend opening rather than evenings", "span_relation": "contradicts"}
+      ],
+      "evidence_spans": [
+        {"citation_index": 0, "support_span": "Only 9 percent said they would visit more often on weekends."}
+      ],
+      "citation_bears": [
+        {"citation_index": 0, "how_it_bears": "The survey reports the opposite preference: evenings, not weekends."}
+      ]
+    },
+    "The council plans to close the branch library next year.": {
+      "verdict": "supported",
+      "why": "A judge is never asked about this claim: its only citation does not resolve."
+    }
+  }
+}

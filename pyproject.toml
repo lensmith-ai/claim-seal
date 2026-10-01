@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claim-seal"
+version = "0.1.0"
+description = "Check each claim against the sources it cites, record where the writing steps beyond them, and seal the claim-evidence rows (not the verdicts or sentence labels) in a SHA-256 digest chain."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+claim-seal = "claim_seal.cli:main"
+
+[tool.setuptools]
+packages = ["claim_seal"]

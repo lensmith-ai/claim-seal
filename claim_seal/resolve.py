@@ -1,0 +1,190 @@
+"""Pass 1, RESOLUTION: does each cited reference exist in the source material? Pure code.
+
+This catches a fabricated citation: a reference to something that was never in front of the
+writer. That is the failure a language model cannot be trusted to self-report, and the one that
+most embarrasses a reader who follows it up. It costs nothing, so it always runs first, and an
+unresolved citation is never sent to pass 2: asking a model whether a claim is supported by a
+source we could not find would produce a confident answer about nothing.
+
+INPUTS
+  brief    {"items": [{"insight": str, "why_it_matters"?: str, "detail"?: [str],
+                       "sources": [{"id": source id, "ref": cited title}],
+                       "analysis"?: [{"text": str, "sources": [...]}]}],
+            "connection"?: {"text": str, "sources": [...]}}
+           A claim's text is read from "text", then "insight", then "headline".
+  sources  {source id: {"label"?: str, "items": [{"title": str, "text": str, "url"?: str,
+                                                 "body"?: str, "retrieved_at"?: str,
+                                                 "id"?: str}]}}
+           or {source id: [items]}, optionally wrapped as {"sources": {...}}.
+           A citation names an item by its "title" (or "key" when present). Pass 2 reads the
+           item's title and text joined (TEXT_FIELDS). "body" is the full captured document
+           the evidence pass quotes from; it defaults to the text.
+"""
+from __future__ import annotations
+
+import re
+
+MAX_SRC_CHARS = 700          # per cited item, in the verification prompt
+FUZZY_MIN = 0.6              # token-overlap floor for a fuzzy title match
+TEXT_FIELDS = ("title", "text")
+
+
+class SourceError(ValueError):
+    """The source material does not have the shape the checker needs."""
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "")).strip().lower()
+
+
+def _tokens(s: str) -> set:
+    return {t for t in re.split(r"[^a-z0-9]+", _norm(s)) if len(t) > 2}
+
+
+def _overlap(a: str, b: str) -> float:
+    ta, tb = _tokens(a), _tokens(b)
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / min(len(ta), len(tb))
+
+
+def load_sources(sources: dict) -> dict:
+    """Normalize the accepted source shapes to {source id: {"label": str, "items": [dict]}}."""
+    if not isinstance(sources, dict):
+        raise SourceError("sources must be a JSON object keyed by source id")
+    if isinstance(sources.get("sources"), dict) and set(sources) <= {"sources", "about"}:
+        sources = sources["sources"]
+    out = {}
+    for sid, entry in sources.items():
+        if isinstance(entry, list):
+            entry = {"items": entry}
+        if not isinstance(entry, dict) or not isinstance(entry.get("items", []), list):
+            raise SourceError(f"source {sid!r} must be a list of items or {{'items': [...]}}")
+        out[str(sid)] = {"label": entry.get("label") or str(sid),
+                         "items": [it for it in entry.get("items") or [] if isinstance(it, dict)]}
+    return out
+
+
+def citation_key(item: dict) -> str:
+    return str(item.get("key") or item.get("title") or "")
+
+
+def index_sources(sources: dict, text_fields: tuple = TEXT_FIELDS) -> dict:
+    """Flatten the sources into {source_id: [{key, title, text, url}, ...]}.
+
+    `key` is what a citation is expected to name; `text` is what pass 2 gets to read. The item's
+    own URL is carried so a resolved citation can be followed: resolution knows exactly which
+    item a citation matched, so this is the one place a reference turns back into a link, and
+    the model never sees or invents it.
+    """
+    out: dict = {}
+    for sid, entry in load_sources(sources).items():
+        rows = []
+        for it in entry["items"]:
+            missing = [field for field in text_fields if field not in it]
+            if missing:
+                raise SourceError(f"{sid}: text field(s) missing from source item: {missing}")
+            key = citation_key(it)
+            text = " ".join(filter(None, (str(it.get(field) or "") for field in text_fields)))
+            rows.append({"key": key, "title": it.get("title") or key, "text": text,
+                         "url": (it.get("url") or None)})
+        out[sid] = rows
+    return out
+
+
+def claim_units(brief: dict):
+    """(kind, index, analysis_index, obj) for every checkable claim, in a fixed order:
+    each item, then its analysis statements, then the connection."""
+    units = []
+    for i, it in enumerate(brief.get("items") or []):
+        units.append(("item", i, None, it))
+        for analysis_i, statement in enumerate(it.get("analysis") or []):
+            if isinstance(statement, dict):
+                units.append(("analysis", i, analysis_i, statement))
+    conn = brief.get("connection")
+    if isinstance(conn, dict):
+        units.append(("connection", 0, None, conn))
+    return units
+
+
+def resolve(brief: dict, sources: dict, *, text_fields: tuple = TEXT_FIELDS) -> dict:
+    """Pass 1. Attach a resolution (exact / fuzzy / unresolved) to every citation. No model."""
+    idx = index_sources(sources, text_fields)
+    report = {"claims": [], "totals": {"citations": 0, "exact": 0, "fuzzy": 0, "unresolved": 0}}
+    for kind, i, analysis_i, obj in claim_units(brief):
+        claim_text = obj.get("text") or obj.get("insight") or obj.get("headline") or ""
+        cites = []
+        for s in (obj.get("sources") or []):
+            sid = s.get("id")
+            ref = s.get("ref") or s.get("label") or ""
+            rows = idx.get(sid) or []
+            hit, how, best = None, "unresolved", 0.0
+            for r in rows:
+                if _norm(r["key"]) == _norm(ref) and _norm(ref):
+                    hit, how, best = r, "exact", 1.0
+                    break
+            if hit is None:
+                for r in rows:
+                    ov = _overlap(r["key"], ref)
+                    if ov > best:
+                        hit, best = r, ov
+                how = "fuzzy" if (hit is not None and best >= FUZZY_MIN) else "unresolved"
+                if how == "unresolved":
+                    hit = None
+            report["totals"]["citations"] += 1
+            report["totals"][how] += 1
+            cites.append({"source": sid, "ref": ref, "resolution": how,
+                          "match_score": round(best, 2) if how == "fuzzy" else None,
+                          "text": (hit["text"][:MAX_SRC_CHARS] if hit else None),
+                          "matched_title": (hit["title"] if hit else None),
+                          "url": (hit.get("url") if hit else None)})
+        report["claims"].append({"kind": kind, "index": i, "analysis_index": analysis_i,
+                                 "claim": claim_text, "citations": cites})
+    return report
+
+
+def target_for_claim(brief: dict, claim: dict) -> dict | None:
+    """The exact record that owns a resolved claim, including analysis statements."""
+    if claim["kind"] == "item":
+        return brief["items"][claim["index"]]
+    if claim["kind"] == "analysis":
+        return (brief["items"][claim["index"]].get("analysis") or [])[claim["analysis_index"]]
+    return brief.get("connection")
+
+
+CITATION_ROW_FIELDS = ("source", "ref", "resolution", "match_score", "url", "matched_title")
+
+
+def resolve_only(brief: dict, sources: dict, receipts: dict, *,
+                 text_fields: tuple = TEXT_FIELDS) -> dict:
+    """Pass 1 only, for writing whose genre overstates on purpose (parody, caricature).
+
+    A support verdict on a deliberate exaggeration is meaningless, and a run of partial and
+    unsupported would read as a quality failure rather than the genre working. What still has
+    to be true is that the thing being exaggerated EXISTS in the material, and that is pass 1.
+    Every claim is marked "cites-real" or "unresolved", never "supported", because nobody
+    checked that and the word would imply somebody had. Mutates `brief` in place.
+    """
+    report = resolve(brief, sources, text_fields=text_fields)
+    counts = {"cites-real": 0, "unresolved": 0}
+    for c in report["claims"]:
+        cites = c["citations"]
+        ok = bool(cites) and any(x["resolution"] != "unresolved" for x in cites)
+        v = {"verdict": "cites-real" if ok else "unresolved",
+             "why": ("every source it names is real material from the given sources; the claim "
+                     "itself is not checked for support") if ok else
+                    "no cited reference matched anything in the given sources",
+             "citations": [{k: x[k] for k in CITATION_ROW_FIELDS} for x in cites]}
+        counts[v["verdict"]] += 1
+        target = target_for_claim(brief, c)
+        if isinstance(target, dict):
+            target["verification"] = v
+            for src_entry, cite in zip(target.get("sources") or [], cites):
+                if cite.get("url"):
+                    src_entry["url"] = cite["url"]
+                    src_entry["resolved_title"] = cite.get("matched_title")
+    rec = {"mode": "resolve-only", "status": "ok",
+           "resolution": report["totals"], "verdicts": counts,
+           "note": "pass 1 only: citations are checked for being real, not for support"}
+    receipts["verification"] = rec
+    return rec

@@ -1,0 +1,42 @@
+{
+  "about": "Self-written, fictional source texts for the claim-seal demo. Millbrook is an invented town.",
+  "sources": {
+    "council": {
+      "label": "Millbrook Town Council notice",
+      "items": [
+        {
+          "id": "council-1",
+          "title": "Library hours extended from March",
+          "text": "Millbrook's public library will open until 9 p.m. on weekdays from March, the council said on Tuesday. The extension is funded for one year from the reserve budget. Councillors said a review of visitor numbers will decide whether the hours continue.",
+          "body": "<html><head><title>Library hours extended from March</title><meta name=\"site\" content=\"council\"></head><body><nav>Home | Notices | Contact</nav><h1>Library hours extended from March</h1><p>Millbrook's public library will open until 9 p.m. on weekdays from March, the council said on Tuesday.</p><p>The extension is funded for one year from the reserve budget. Councillors said a review of visitor numbers will decide whether the hours continue.</p></body></html>",
+          "url": "https://example.org/millbrook/notices/library-hours",
+          "retrieved_at": "2025-03-04T10:00:00Z"
+        }
+      ]
+    },
+    "library": {
+      "label": "Millbrook Library annual report",
+      "items": [
+        {
+          "id": "library-1",
+          "title": "Annual report: visits and lending",
+          "text": "Visits to the library rose by 12 percent last year, mostly in the evening. Lending of printed books fell slightly, while e-book lending doubled. The report notes that the reading room was often full after 6 p.m.",
+          "url": "https://example.org/millbrook/library/annual-report",
+          "retrieved_at": "2025-03-04T10:00:00Z"
+        }
+      ]
+    },
+    "survey": {
+      "label": "Residents' survey",
+      "items": [
+        {
+          "id": "survey-1",
+          "title": "Survey: what residents want from the library",
+          "text": "A survey of 400 residents found that 61 percent wanted longer library hours on weekday evenings. Parking near the library was the most common complaint. Only 9 percent said they would visit more often on weekends.",
+          "url": "https://example.org/millbrook/survey",
+          "retrieved_at": "2025-03-04T10:00:00Z"
+        }
+      ]
+    }
+  }
+}

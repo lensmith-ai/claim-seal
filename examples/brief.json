@@ -1,0 +1,35 @@
+{
+  "about": "A small composed brief about the invented town of Millbrook. Item 1 is stated by its sources, item 2 takes a step beyond them, item 3 is contradicted by its source, item 4 cites a source that does not exist.",
+  "items": [
+    {
+      "insight": "Millbrook's library will stay open until 9 p.m. on weekdays from March.",
+      "why_it_matters": "The extension is funded for one year, so a review of visitor numbers decides whether it lasts.",
+      "detail": ["Evening visits were already the busiest part of the day."],
+      "sources": [
+        {"id": "council", "ref": "Library hours extended from March", "label": "Town council"},
+        {"id": "library", "ref": "Annual report: visits and lending", "label": "Library report"}
+      ]
+    },
+    {
+      "insight": "Longer hours are likely to lift library visits further.",
+      "why_it_matters": "If the reading room was already full in the evening, the extra hours meet demand rather than create it.",
+      "detail": ["Weekend demand is even stronger than evening demand."],
+      "sources": [
+        {"id": "library", "ref": "Annual report: visits and lending", "label": "Library report"},
+        {"id": "survey", "ref": "Survey: what residents want from the library", "label": "Residents' survey"}
+      ]
+    },
+    {
+      "insight": "Most residents asked for weekend opening rather than evenings.",
+      "sources": [
+        {"id": "survey", "ref": "Survey: what residents want from the library", "label": "Residents' survey"}
+      ]
+    },
+    {
+      "insight": "The council plans to close the branch library next year.",
+      "sources": [
+        {"id": "council", "ref": "Branch library closure plan", "label": "Town council"}
+      ]
+    }
+  ]
+}

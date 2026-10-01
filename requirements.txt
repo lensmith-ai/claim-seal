@@ -1,0 +1,2 @@
+# claim-seal uses the Python standard library only (Python 3.10 or newer).
+# Nothing to install to run it, its tests or its demo.
