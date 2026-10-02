@@ -348,14 +348,6 @@ def verify(brief: dict, sources: dict, receipts: dict, model, *,
         if not cites or not any_resolved:
             v = {"verdict": "unresolved",
                  "why": "no cited reference matched anything in the given sources"}
-        elif conflict:
-            # Added in this library (not in the composer): a verdict of supported or partial paired
-            # with the relation contradicts is self-contradictory, so it is not a usable verdict.
-            # Left as it was, a partial would print "partly supported" on every line of a claim
-            # the judge said its source contradicts.
-            v = {"verdict": "unchecked",
-                 "why": f"the judge answered {judged.get('verdict')} but named the relation "
-                        "contradicts; a self-contradictory verdict is not used"}
         elif n in verdicts and verdicts[n]["verdict"] in ("supported", "partial", "unsupported"):
             # Publish a COPY without the model's raw proposals: validated spans are attached per
             # citation by span_receipt; rejected proposals never reach the output.
@@ -371,6 +363,19 @@ def verify(brief: dict, sources: dict, receipts: dict, model, *,
                     return labels.get(resolved[j].get("source"), resolved[j].get("source") or m.group(0))
                 return m.group(0)
             v["why"] = re.sub(r"\bSource\s+(\d+)\b", _name, v.get("why") or "")
+            if conflict:
+                # Added in this library (not in the composer), revised on a measured finding: a
+                # judge that names "contradicts" has said the source disagrees, so a supported or
+                # partial verdict word with it is recorded UNSUPPORTED. In a preregistered agreement
+                # test, 6 of 80 public refutation items came back partial + contradicts; treating
+                # them as unchecked (the previous rule) lost real refutations. The override is
+                # recorded, so a reader can see which word the judge actually used.
+                v["verdict_override"] = {"rule": "relation-contradicts",
+                                         "judge_verdict": v["verdict"]}
+                v["verdict"] = "unsupported"
+                v["why"] = (f"recorded unsupported: the judge named the relation contradicts "
+                            f"(its verdict word was {v['verdict_override']['judge_verdict']}). "
+                            + v["why"])[:400]
         else:
             v = {"verdict": "unchecked",
                  "why": "the verification step did not return a usable verdict for this claim"}

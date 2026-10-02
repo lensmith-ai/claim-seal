@@ -59,8 +59,9 @@ Then everything the model said is checked by code, fail-closed:
   ambiguous quote may grow by up to 1,536 characters of context to become unique; otherwise it
   is refused rather than guessed.
 - A `supported` verdict with no located passage is recorded as `unresolved`, not supported. A
-  `partial` is never recorded as `unsupported`. A missing or unreadable verdict is `unchecked`
-  or `unknown`, never a pass.
+  `partial` is never recorded as `unsupported`, unless the judge also named the relation
+  `contradicts` (see below). A missing or unreadable verdict is `unchecked` or `unknown`, never a
+  pass.
 
 Claim verdicts: `supported`, `partial`, `unsupported`, `unresolved` (pass 1 found nothing),
 `unchecked` (no usable verdict). The brief's overall status is one of `ok`, `unsupported`,
@@ -88,12 +89,25 @@ two ways, depending on where it appears:
 - **In a brief handed to `line_states()`, `through_line()` or `line_rule()`** (a
   `sentence_relation` that did not come through intake): **refused** with `UnknownRelation`.
 
-`contradicts` never comes out supported: not as a printed line (a sentence whose own relation is
-`contradicts` is left out whatever the claim verdict), not in the sealed record (a `supported`
-verdict paired with `contradicts` is recorded `unresolved`), and not as a claim verdict (a
-`supported` or `partial` verdict paired with `contradicts` is unusable: `unchecked`, so none of
-its sentences print as "supported" or "partly supported"). Because every guard uses the same
-reader, `"contradicts "`, `"Contradicts"` and the alias `"contradicted"` all count.
+**A judge that names `contradicts` has said the source disagrees, and that wins over its verdict
+word.** When the claim-level answer is `supported` or `partial` with the relation `contradicts`:
+
+- the claim verdict is recorded **`unsupported`**; the verification block carries
+  `verdict_override: {"rule": "relation-contradicts", "judge_verdict": "supported" | "partial"}`
+  and its `why` begins "recorded unsupported: the judge named the relation contradicts";
+- its evidence rows are `unsupported` with the rule id `EVIDENCE-RELATION-CONTRADICTS`, and keep
+  the relation `contradicts` (sealed like every other row);
+- no line of it prints: an `unsupported` claim is omitted from `line_states()`.
+
+An `unsupported` verdict with `contradicts` stays as the judge gave it (rule
+`EVIDENCE-MODEL-UNSUPPORTED`). Separately, a sentence whose own relation is `contradicts` is left
+out whatever its claim's verdict. So `contradicts` never comes out supported or partly supported:
+not as a printed line, not in the sealed record, not as a claim verdict. Because every guard uses
+the same reader, `"contradicts "`, `"Contradicts"` and the alias `"contradicted"` all count.
+
+This rule was measured, not assumed: in a preregistered agreement test on public refutation
+items, 6 of 80 came back `partial` + `contradicts`. An earlier version recorded such claims as
+`unchecked`, which hid real refutations.
 
 ## The seal and its limits
 
@@ -229,7 +243,7 @@ lens shapes the writing, not the check; see `lenses/README.md`.
 The checking logic is the composer's. Its deployment flags became keyword arguments; its source
 registry became the plain sources format above; private identifiers were removed. Behaviour
 changes, each covered by a test: a `supported` or `partial` verdict paired with the relation
-`contradicts` is not used (claim `unchecked`; a `supported` evidence row becomes `unresolved`);
+`contradicts` is recorded `unsupported` (claim and evidence rows, the override named);
 every relation word is read by one shared reader (trimmed, with the `contradicted` alias) at the
 claim guard, the evidence pass and the per-sentence intake; `judge()` returns an annotated copy
 instead of editing its input; source digests are taken when sources are handed in rather than

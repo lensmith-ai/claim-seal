@@ -9,7 +9,7 @@ import helpers  # noqa: F401
 from helpers import fixed
 
 from claim_seal import (LINE_RULE, SPAN_RELATIONS, THROUGH_LINE, SourceError, UnknownRelation,
-                        judge, line_rule, line_states, resolve, resolve_only, through_line)
+                        judge, line_rule, line_states, resolve, resolve_only, through_line, verify_seal)
 from claim_seal.completion import complete_partials
 from claim_seal.evidence import capture_sources, digests_for, source_lineage
 from claim_seal.normalize import NORMALIZER_ID, normalize
@@ -244,52 +244,50 @@ class LineStateTests(unittest.TestCase):
 
 
 class ContradictsNeverSupportedAtClaimLevel(unittest.TestCase):
-    def test_a_supported_verdict_naming_contradicts_is_not_published_as_supported(self):
-        reply = {"verdicts": [{"claim": 1, "verdict": "supported", "why": "w", "relation": "contradicts",
-                               "strength": 80, "evidence_spans": [{"citation_index": 0,
-                                                                   "support_span": "reopened on Monday"}]}]}
-        result = judge(brief("Harbour bridge reopens after repairs"), SOURCES, fixed(reply), sharded=False)
-        v = result["brief"]["items"][0]["verification"]
-        self.assertEqual(v["verdict"], "unchecked")
-        self.assertNotEqual(result["claim_evidence"]["outcomes"][0]["support_state"], "supported")
-        self.assertNotIn("supported", [l["state"] for l in line_states(result["brief"])["lines"]])
+    """supported or partial + contradicts (any spacing, case, or the alias) -> claim UNSUPPORTED,
+    nothing printed, the row unsupported with the verb kept, and the seal verifies."""
 
-    def test_a_partial_verdict_naming_contradicts_prints_nothing_as_supported(self):
-        for relation in ("contradicts", "contradicts ", "CONTRADICTS"):
-            reply = {"verdicts": [{"claim": 1, "verdict": "partial", "why": "w", "relation": relation,
-                                   "citation_spans": [{"citation_index": 0, "span_quote": "reopened",
-                                                       "span_relation": "says"}]}]}
-            for sharded in (False, True):
-                result = judge(brief("Harbour bridge reopens after repairs"), SOURCES, fixed(reply),
-                               sharded=sharded)
-                self.assertEqual(result["brief"]["items"][0]["verification"]["verdict"], "unchecked")
-                states = line_states(result["brief"])
-                self.assertEqual(states["lines"], [], (relation, sharded))
-                self.assertNotEqual(result["claim_evidence"]["outcomes"][0]["support_state"], "supported")
+    VARIANTS = ("contradicts", "contradicts ", "CONTRADICTS", " Contradicts\n", "contradicted", " CONTRADICTED ")
 
-    def test_the_contradicted_alias_and_padded_forms_are_caught_at_claim_level_and_on_the_page(self):
+    def run_reply(self, verdict, relation, sharded):
+        reply = {"verdicts": [{"claim": 1, "verdict": verdict, "why": "Source 1 says the opposite.",
+                               "relation": relation, "strength": 80,
+                               "citation_spans": [{"citation_index": 0, "span_quote": "reopened",
+                                                   "span_relation": "says"}],
+                               "evidence_spans": [{"citation_index": 0, "support_span": "reopened on Monday"}]}]}
+        return judge(brief("Harbour bridge reopens after repairs"), SOURCES, fixed(reply), sharded=sharded)
+
+    def test_supported_or_partial_with_contradicts_is_unsupported_and_not_printed(self):
         for verdict in ("supported", "partial"):
-            for relation in ("contradicted", "Contradicts ", "CONTRADICTED ", " contradicted\n"):
-                reply = {"verdicts": [{"claim": 1, "verdict": verdict, "why": "w", "relation": relation,
-                                       "strength": 80, "evidence_spans": [{"citation_index": 0,
-                                                                           "support_span": "reopened on Monday"}]}]}
+            for relation in self.VARIANTS:
                 for sharded in (False, True):
                     case = (verdict, relation, sharded)
-                    result = judge(brief("Harbour bridge reopens after repairs"), SOURCES, fixed(reply),
-                                   sharded=sharded)
-                    self.assertEqual(result["brief"]["items"][0]["verification"]["verdict"], "unchecked", case)
-                    self.assertEqual(line_states(result["brief"])["lines"], [], case)
+                    result = self.run_reply(verdict, relation, sharded)
+                    v = result["brief"]["items"][0]["verification"]
+                    self.assertEqual(v["verdict"], "unsupported", case)
+                    self.assertEqual(v["verdict_override"], {"rule": "relation-contradicts",
+                                                             "judge_verdict": verdict}, case)
+                    self.assertTrue(v["why"].startswith("recorded unsupported: the judge named the relation contradicts"), case)
+                    self.assertIn("Press says the opposite.", v["why"], case)
+                    self.assertEqual(result["status"], "unsupported", case)
+                    states = line_states(result["brief"])
+                    self.assertEqual(states["lines"], [], case)
+                    self.assertEqual(states["omitted"], [{"item": 1, "rule": "verdict-not-printable",
+                                                          "verdict": "unsupported"}], case)
                     row = result["claim_evidence"]["outcomes"][0]
-                    self.assertNotEqual(row["support_state"], "supported", case)
-                    self.assertEqual(row["relation"], "contradicts", case)
+                    self.assertEqual((row["support_state"], row["state_reason"], row["relation"]),
+                                     ("unsupported", "EVIDENCE-RELATION-CONTRADICTS", "contradicts"), case)
+                    self.assertTrue(verify_seal(result["claim_evidence"]), case)
 
-    def test_the_same_reply_with_says_is_supported(self):
-        reply = {"verdicts": [{"claim": 1, "verdict": "supported", "why": "w", "relation": "says",
-                               "strength": 80, "evidence_spans": [{"citation_index": 0,
-                                                                   "support_span": "reopened on Monday"}]}]}
-        result = judge(brief("Harbour bridge reopens after repairs"), SOURCES, fixed(reply), sharded=False)
-        self.assertEqual(result["brief"]["items"][0]["verification"]["verdict"], "supported")
-        self.assertEqual(result["claim_evidence"]["outcomes"][0]["support_state"], "supported")
+    def test_without_contradicts_the_same_replies_keep_their_verdicts(self):
+        for verdict, relation in (("supported", "says"), ("partial", "suggests")):
+            result = self.run_reply(verdict, relation, True)
+            v = result["brief"]["items"][0]["verification"]
+            self.assertEqual(v["verdict"], verdict)
+            self.assertNotIn("verdict_override", v)
+            self.assertTrue(line_states(result["brief"])["lines"])
+        self.assertEqual(self.run_reply("supported", "says", False)["claim_evidence"]["outcomes"][0]["support_state"],
+                         "supported")
 
 
 POISON = [None, "nonsense", 42, [], {"source": "evil", "ref": "injected", "resolution": "exact"}]

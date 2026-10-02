@@ -163,21 +163,36 @@ class ClaimEvidenceTests(unittest.TestCase):
 
 
 class ContradictsNeverSupported(unittest.TestCase):
-    def test_a_supported_verdict_with_contradicts_is_not_recorded_as_supported(self):
-        rec = build(verdicts=model(relation="contradicts", strength=90))
-        o = rec["outcomes"][0]
-        self.assertEqual(o["evidence"], "present")
-        self.assertNotEqual(o["support_state"], "supported")
-        self.assertEqual((o["support_state"], o["state_reason"]),
-                         ("unresolved", "EVIDENCE-RELATION-CONTRADICTS"))
-        self.assertEqual(o["relation_coarse"], "contradicted")
-        self.assertTrue(verify_seal(rec))
+    """A judge that names "contradicts" with a supported or partial verdict word has said the
+    source disagrees: the row is UNSUPPORTED under EVIDENCE-RELATION-CONTRADICTS and keeps the verb."""
 
-    def test_a_padded_or_capitalised_contradicts_is_read_the_same_way(self):
-        for word in ("contradicts ", " Contradicts\n", "CONTRADICTS", "\tcontradicts"):
-            o = build(verdicts=model(relation=word))["outcomes"][0]
-            self.assertEqual((o["support_state"], o["relation"], o["relation_source"]),
-                             ("unresolved", "contradicts", "judge"), repr(word))
+    def test_supported_or_partial_with_contradicts_is_an_unsupported_row_that_keeps_the_verb(self):
+        for verdict in ("supported", "partial"):
+            rec = build(verdicts=model(verdict=verdict, relation="contradicts", strength=90))
+            o = rec["outcomes"][0]
+            self.assertEqual((o["support_state"], o["state_reason"], o["relation"], o["relation_coarse"],
+                              o["relation_source"]),
+                             ("unsupported", "EVIDENCE-RELATION-CONTRADICTS", "contradicts", "contradicted",
+                              "judge"), verdict)
+            self.assertEqual(o["corroboration"], 0)
+            self.assertTrue(verify_seal(rec), verdict)
+            tampered = copy.deepcopy(rec)
+            tampered["outcomes"][0]["support_state"] = "supported"
+            self.assertFalse(verify_seal(tampered), verdict)
+
+    def test_padded_capitalised_and_alias_forms_are_read_the_same_way(self):
+        for verdict in ("supported", "partial"):
+            for word, source in (("contradicts ", "judge"), (" Contradicts\n", "judge"), ("CONTRADICTS", "judge"),
+                                 ("\tcontradicts", "judge"), ("contradicted", "compat-default"),
+                                 (" CONTRADICTED ", "compat-default")):
+                o = build(verdicts=model(verdict=verdict, relation=word))["outcomes"][0]
+                self.assertEqual((o["support_state"], o["state_reason"], o["relation"], o["relation_source"]),
+                                 ("unsupported", "EVIDENCE-RELATION-CONTRADICTS", "contradicts", source),
+                                 (verdict, repr(word)))
+
+    def test_an_unsupported_verdict_with_contradicts_keeps_the_judges_own_reason(self):
+        o = build(verdicts=model(verdict="unsupported", relation="contradicts"))["outcomes"][0]
+        self.assertEqual((o["support_state"], o["state_reason"]), ("unsupported", "EVIDENCE-MODEL-UNSUPPORTED"))
 
     def test_contradicts_never_supported_across_every_verdict(self):
         for verdict in ("supported", "partial", "unsupported", "", "nonsense"):

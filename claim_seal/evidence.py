@@ -13,7 +13,9 @@ Two axes are kept apart on purpose:
 
 States never collapse a "could not establish" into a definite negative:
   supported    judge said supported AND every proposed span located
-  unsupported  judge said unsupported (its own word, EVIDENCE-MODEL-UNSUPPORTED)
+  unsupported  judge said unsupported (its own word, EVIDENCE-MODEL-UNSUPPORTED), or said
+               supported/partial but named the relation contradicts
+               (EVIDENCE-RELATION-CONTRADICTS: the source disagrees, and that wins)
   unresolved   we tried and could not establish support (partial, not located, ambiguous, drift)
   unknown      we could not even look (no body, failed capture, undecodable, no verdict)
 """
@@ -316,11 +318,6 @@ def build_claim_evidence(brief: dict, sources: dict, model_verdicts: dict | None
             # says requires a located span. Failing to locate one does NOT establish that the
             # source is unrelated; it establishes that we could not check.
             outcome.update({"relation": "undetermined", "relation_coarse": "undetermined", "strength": 0})
-        if outcome["support_state"] == "supported" and outcome["relation"] == "contradicts":
-            # Added in this library (not in the composer): a judge that says "supported" and, in
-            # the same breath, "the source contradicts the claim" has not established support.
-            outcome.update({"support_state": "unresolved",
-                            "state_reason": "EVIDENCE-RELATION-CONTRADICTS"})
         outcomes.append(outcome)
 
     for claim_n, (kind, item_index, analysis_index, claim) in enumerate(claim_units(brief)):
@@ -346,6 +343,16 @@ def build_claim_evidence(brief: dict, sources: dict, model_verdicts: dict | None
                 append_outcome(binding, outcome)
                 continue
             semantic = str(verdict.get("verdict") or "").lower()
+            if semantic in ("supported", "partial") and relation == "contradicts":
+                # Added in this library (not in the composer), revised on a measured finding: a
+                # judge that names "contradicts" has said the source disagrees, whatever verdict
+                # word came with it. In a preregistered agreement test on public refutation items,
+                # 6 of 80 came back partial + contradicts; recording those as anything weaker hid
+                # real refutations. The row is unsupported, keeps the verb, and names the override.
+                outcome.update({"support_state": "unsupported",
+                                "state_reason": "EVIDENCE-RELATION-CONTRADICTS"})
+                append_outcome(binding, outcome)
+                continue
             if semantic == "unsupported":
                 outcome.update({"support_state": "unsupported",
                                 "state_reason": "EVIDENCE-MODEL-UNSUPPORTED"})
