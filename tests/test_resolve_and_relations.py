@@ -107,7 +107,7 @@ class RelationTableTests(unittest.TestCase):
         self.assertEqual(through_line(" Implies "), "step-beyond")
 
     def test_unknown_words_are_refused(self):
-        for word in ("hallucinates", "stated", "supports", "", None, "says-ish"):
+        for word in ("hallucinates", "pondered", "supports", "", None, "says-ish"):
             with self.assertRaises(UnknownRelation):
                 through_line(word)
             with self.assertRaises(UnknownRelation):
@@ -132,12 +132,12 @@ class SharedRelationReaderTests(unittest.TestCase):
     def test_one_reader_trims_lowercases_and_maps_aliases(self):
         from claim_seal.relations import read_relation
         self.assertEqual(read_relation(" Suggests\n"), ("suggests", "verb"))
-        self.assertEqual(read_relation("CONTRADICTED "), ("contradicts", "alias"))
-        self.assertEqual(read_relation("stated"), ("says", "alias"))
-        self.assertEqual(read_relation("inferred"), ("implies", "alias"))
+        self.assertEqual(read_relation("CONTRADICTED "), ("contradicts", "synonym"))
+        self.assertEqual(read_relation("stated"), ("says", "synonym"))
+        self.assertEqual(read_relation("inferred"), ("implies", "synonym"))
         self.assertEqual(read_relation(None), (None, "empty"))
         self.assertEqual(read_relation("  "), (None, "empty"))
-        self.assertEqual(read_relation("hallucinates"), (None, "unknown"))
+        self.assertEqual(read_relation("hallucinates"), ("undetermined", "unknown"))
 
     def test_every_guard_uses_the_shared_reader(self):
         import inspect
@@ -170,13 +170,26 @@ class SentenceRelationIntakeTests(unittest.TestCase):
                 self.assertNotIn("detail[0]", {l["field"] for l in states["lines"]}, (word, verdict))
                 self.assertEqual(states["left_out"][0]["rule"], "span-contradicts")
         span, _ = self.run_word("contradicted")
-        self.assertEqual(span["sentence_relation_alias"], "contradicted")
+        self.assertEqual((span["sentence_relation_raw"], span["sentence_relation_read"]),
+                         ("contradicted", "synonym"))
         span, _ = self.run_word("contradicts")
-        self.assertNotIn("sentence_relation_alias", span)
+        self.assertNotIn("sentence_relation_raw", span)
 
-    def test_an_unknown_word_is_dropped_and_the_sentence_carries_the_claim_verdict(self):
-        span, states = self.run_word("hallucinates")
-        self.assertNotIn("sentence_relation", span)
+    def test_an_unknown_word_is_cant_tell_and_never_takes_the_claim_verdict(self):
+        for verdict in ("supported", "partial"):
+            for word in ("hallucinates", "pondered", " Mulled "):
+                span, states = self.run_word(word, verdict)
+                self.assertEqual((span["sentence_relation"], span["sentence_relation_read"]),
+                                 ("undetermined", "unknown"), word)
+                self.assertEqual(span["sentence_relation_raw"], word.strip())
+                line = next(l for l in states["lines"] if l["field"] == "detail[0]")
+                self.assertEqual((line["state"], line["label"], line["state_scope"]),
+                                 ("cant_tell", "can't tell", "line"), (word, verdict))
+                self.assertNotIn(line["state"], ("supported", "partly_supported"))
+
+    def test_the_judges_own_undetermined_still_carries_the_claim_verdict(self):
+        span, states = self.run_word("undetermined")
+        self.assertNotIn("sentence_relation_read", span)
         line = next(l for l in states["lines"] if l["field"] == "detail[0]")
         self.assertEqual((line["state"], line["state_scope"]), ("supported", "card"))
 
@@ -215,7 +228,8 @@ class LineStateTests(unittest.TestCase):
     def test_contradicts_is_left_out_and_never_printed_supported(self):
         out = line_states(judged("supported", [("detail[0]", "six weeks", "contradicts", "exact")]))
         self.assertNotIn("detail[0]", {l["field"] for l in out["lines"]})
-        self.assertEqual(out["left_out"], [{"item": 1, "field": "detail[0]", "rule": "span-contradicts"}])
+        self.assertEqual(out["left_out"], [{"item": 1, "field": "detail[0]", "rule": "span-contradicts",
+                                            "attribution": out["left_out"][0]["attribution"]}])
 
     def test_under_a_partial_verdict_a_contradicts_line_is_never_printed(self):
         doc = judged("partial", [("why_it_matters", "carries", "contradicts", "exact"),
@@ -224,7 +238,8 @@ class LineStateTests(unittest.TestCase):
         printed = {l["field"]: l["state"] for l in out["lines"]}
         self.assertNotIn("why_it_matters", printed)
         self.assertEqual(printed, {"insight": "partly_supported", "detail[0]": "partly_supported"})
-        self.assertEqual(out["left_out"], [{"item": 1, "field": "why_it_matters", "rule": "span-contradicts"}])
+        self.assertEqual([(r["item"], r["field"], r["rule"]) for r in out["left_out"]],
+                         [(1, "why_it_matters", "span-contradicts")])
         for line in out["lines"]:
             self.assertNotEqual(line.get("relation"), "contradicts")
 

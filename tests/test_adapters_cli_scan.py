@@ -117,7 +117,9 @@ class DemoTests(unittest.TestCase):
             sources = json.load(h)
         result = judge(brief, sources, ReplayJudge.from_file(ANSWERS))
         verdicts = [i["verification"]["verdict"] for i in result["brief"]["items"]]
-        self.assertEqual(verdicts, ["supported", "partial", "unsupported", "unresolved"])
+        self.assertEqual(verdicts, ["supported", "partial", "unsupported", "unresolved", "partial"])
+        flags = [(r["item"], r["flag"]) for r in result["attribution"] if r["flag"]]
+        self.assertEqual(flags, [(5, "overclaim")])
         relations = {c["span"].get("sentence_relation") for i in result["brief"]["items"]
                      for c in i["verification"]["citations"] if c.get("span")}
         self.assertTrue({"says", "implies", "contradicts"} <= relations)
@@ -158,7 +160,7 @@ class DemoTests(unittest.TestCase):
                 json.dump(doc, h)
             code, text = run_cli("verify-seal", out)
         self.assertEqual(code, 0)
-        self.assertIn("claim_evidence.outcomes: 6 rows recompute", text)
+        self.assertIn("claim_evidence.outcomes: 7 rows recompute", text)
         self.assertIn("(outcome, span, verb, judge-chose flag, binding)", text)
         self.assertIn("Not sealed: claim verdicts, per-sentence relations and through-line labels, rule ids", text)
 

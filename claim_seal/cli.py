@@ -18,7 +18,8 @@ import sys
 from .adapters import AdapterError, OpenAICompatible, ReplayJudge
 from .support import judge
 from .relations import THROUGH_LINE, UnknownRelation, line_states
-from .resolve import SourceError, resolve_only
+from .attribution import check_span
+from .resolve import SourceError, load_sources, resolve_only
 from .seal import seal_problem
 
 
@@ -52,7 +53,15 @@ def _walk(brief: dict):
         yield "connection", brief["connection"]
 
 
-def _print_report(result: dict, out) -> None:
+def _attribution_text(row: dict) -> str:
+    verb = row.get("attribution_verb")
+    if not verb:
+        return "attribution: none found"
+    text = f'attribution: "{verb}" ({row["attribution_strength"]}) vs relation {row.get("relation") or "-"}'
+    return text + (f' -> {row["flag"]}: {row["message"]}' if row.get("flag") else " -> no flag")
+
+
+def _print_report(result: dict, out, labels: dict | None = None) -> None:
     brief = result["brief"]
     rec = result["verification"]
     w = out.write
@@ -74,12 +83,16 @@ def _print_report(result: dict, out) -> None:
                 line += (f"\n        span [{span['field']}] {span['quote']!r}"
                          f"\n        relation: {rel or '-'}  through line: {label}"
                          f"  (placed by {span['producer']})")
+            if span:
+                found = check_span(obj, cite, labels)
+                if found is not None:
+                    line += "\n        " + _attribution_text(found)
             if cite.get("bears"):
                 line += f"\n        bears: {cite['bears']}"
             w(line + "\n")
         w("\n")
     try:
-        states = line_states(brief)
+        states = line_states(brief, labels=labels)
     except UnknownRelation as exc:
         w(f"through-line page states refused: {exc}\n")
     else:
@@ -87,10 +100,16 @@ def _print_report(result: dict, out) -> None:
         for line in states["lines"]:
             w(f"  item {line['item']} [{line['field']}] {line['label']} "
               f"({line['state_scope']}): {line['text']}\n")
+            for row in line.get("attribution") or []:
+                if row.get("flag"):
+                    w(f"      attribution {row['flag']}: {row['message']}\n")
         for row in states["omitted"]:
             w(f"  item {row['item']} omitted: {row['rule']}\n")
         for row in states["left_out"]:
             w(f"  item {row['item']} [{row['field']}] left out: {row['rule']}\n")
+            for found in row.get("attribution") or []:
+                if found.get("flag"):
+                    w(f"      attribution {found['flag']}: {found['message']}\n")
     evidence = result.get("claim_evidence")
     if evidence:
         found = evidence["verification"]["seal"]
@@ -99,7 +118,8 @@ def _print_report(result: dict, out) -> None:
         w(f"seal: {found['algorithm']} {found['value']}  (unkeyed; tamper-evident only "
           f"alongside version history; not a signature)\n")
         w("seal covers: the claim-evidence rows (outcome, span, verb, judge-chose flag, binding); "
-          "not the verdicts, sentence relations, through-line labels or rule ids above\n")
+          "not the verdicts, sentence relations, through-line labels, attribution flags or rule "
+          "ids above\n")
         problem = seal_problem(evidence)
         w(f"seal recomputes: {'yes' if problem is None else 'NO - ' + problem}\n")
 
@@ -134,7 +154,8 @@ def cmd_check(args) -> int:
                            sharded=not args.whole_brief, local_placement=not args.no_local_placement,
                            evidence=not args.no_evidence, completion=args.completion,
                            pool_size=args.pool, claim_deadline_s=args.deadline)
-            _print_report(result, sys.stdout)
+            _print_report(result, sys.stdout,
+                          {sid: e["label"] for sid, e in load_sources(sources).items()})
     except (SourceError, AdapterError) as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 2

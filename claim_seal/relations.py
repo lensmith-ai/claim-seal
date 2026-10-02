@@ -58,29 +58,44 @@ LINE_RULE = {
 
 PRINTED_VERDICTS = {"supported": "supported", "partial": "partly_supported"}
 LABEL = {"supported": "supported", "partly_supported": "partly supported",
-         "reading": "our reading"}
+         "reading": "our reading", "cant_tell": "can't tell"}
 
 
-# Coarse-axis words a judge sometimes answers with instead of a verb. Read as the verb they name,
-# but marked as an alias so a record can tell them from the judge's own verb.
-RELATION_ALIASES = {"stated": "says", "inferred": "implies", "contradicted": "contradicts"}
+# Synonyms the reader accepts and the verb each is read as. THE ONE LIST: the claim-level guard,
+# the evidence pass, the per-sentence intake and the page views all read through read_relation.
+# The judge's prompt still offers only the ten vocabulary words; this only forgives a judge that
+# answers with a near word. Documented in the README ("Relation words").
+RELATION_SYNONYMS = {
+    # states it -> says
+    **{w: "says" for w in ("states", "stated", "reports", "reported", "notes", "noted",
+                           "describes", "described", "writes", "wrote", "announces", "announced",
+                           "confirms", "confirmed", "said")},
+    # a step beyond -> a canonical step-beyond verb
+    **{w: "implies" for w in ("implied", "infers", "inferred", "argues", "argued")},
+    "suggested": "suggests", "connoted": "connotes", "followed": "follows",
+    "explained": "explains", "posited": "posits", "illustrated": "illustrates",
+    # disagrees -> contradicts
+    **{w: "contradicts" for w in ("contradicted", "refutes", "refuted", "denies", "denied")},
+}
+# Kept for callers of the earlier name: the three composer aliases are synonyms now.
+RELATION_ALIASES = {w: RELATION_SYNONYMS[w] for w in ("stated", "inferred", "contradicted")}
 
 
 def read_relation(raw: object) -> tuple[str | None, str]:
     """The ONE reader of a judge's relation word, used by every guard so they cannot disagree.
 
     Trims and lower-cases, then returns (verb, how):
-      (verb, "verb")       a word in the closed vocabulary
-      (verb, "alias")      stated / inferred / contradicted, read as says / implies / contradicts
-      (None, "empty")      nothing given
-      (None, "unknown")    anything else
+      (verb, "verb")             a word in the closed vocabulary
+      (verb, "synonym")          a word in RELATION_SYNONYMS, read as the verb it names
+      ("undetermined", "unknown")  any other word: CAN'T TELL. Never read as support.
+      (None, "empty")            nothing given
     """
     word = str(raw if raw is not None else "").strip().lower()
     if word in SPAN_RELATIONS:
         return word, "verb"
-    if word in RELATION_ALIASES:
-        return RELATION_ALIASES[word], "alias"
-    return None, ("empty" if not word else "unknown")
+    if word in RELATION_SYNONYMS:
+        return RELATION_SYNONYMS[word], "synonym"
+    return (None, "empty") if not word else ("undetermined", "unknown")
 
 
 class UnknownRelation(ValueError):
@@ -88,10 +103,16 @@ class UnknownRelation(ValueError):
 
 
 def _closed(verb: object) -> str:
-    word = str(verb if verb is not None else "").strip().lower()
-    if word not in SPAN_RELATIONS:
+    """A vocabulary verb or synonym, read; anything else is refused (UnknownRelation).
+
+    The table views refuse an unknown word because nothing says where it came from. A judge's
+    unknown word never reaches them raw: intake has already read it as "undetermined" and marked
+    the span (sentence_relation_read: "unknown"), and line_states shows that sentence as can't tell.
+    """
+    word, how = read_relation(verb)
+    if how not in ("verb", "synonym"):
         raise UnknownRelation(f"relation word {verb!r} is not in the vocabulary "
-                              f"{sorted(SPAN_RELATIONS)}")
+                              f"{sorted(SPAN_RELATIONS)} or its synonyms")
     return word
 
 
@@ -130,7 +151,7 @@ def item_lines(item: dict) -> list:
     return lines
 
 
-def line_states(brief: dict, second_checks: dict | None = None) -> dict:
+def line_states(brief: dict, second_checks: dict | None = None, labels: dict | None = None) -> dict:
     """Decide what a reader-facing page may print for every line of a judged brief.
 
     `brief` is the annotated brief judge() returns. `second_checks` optionally maps
@@ -142,10 +163,18 @@ def line_states(brief: dict, second_checks: dict | None = None) -> dict:
       item is omitted;
     - a line whose span relation is a step beyond the source is "our reading", but only when that
       citation resolved; otherwise the line is left out;
+    - a line whose span carries a word the judge used that the reader did not know
+      (sentence_relation_read: "unknown") is "can't tell" at line scope: it never takes the
+      claim's verdict and never prints as supported;
     - otherwise the line carries its claim's verdict ("card" scope), or "supported" at line scope
       when a second check said so.
-    Unknown relation words raise UnknownRelation.
+    Every printed and left-out line also carries "attribution": the attribution-overclaim results
+    (claim_seal.attribution) for the spans on it. They are informational: they change no state.
+    `labels` ({source id: name}) helps find the source's name in a sentence.
+    A relation word outside the vocabulary and its synonyms that did NOT come through intake
+    raises UnknownRelation.
     """
+    from .attribution import check_span  # local: attribution imports this module
     second_checks = second_checks or {}
     lines_out, omitted, left_out = [], [], []
     for index, item in enumerate(brief.get("items") or []):
@@ -161,29 +190,36 @@ def line_states(brief: dict, second_checks: dict | None = None) -> dict:
         for field, span_field, text in item_lines(item):
             spanned = [c for c in citations if (c.get("span") or {}).get("field") == span_field]
             relations = [_relation(c) for c in spanned]
+            attribution = [r for r in (check_span(item, c, labels) for c in spanned) if r]
             if "contradicts" in relations:
                 if field == "insight":
                     heading_contradicted = True
                 else:
                     left_out.append({"item": index + 1, "field": span_field,
-                                     "rule": "span-contradicts"})
+                                     "rule": "span-contradicts", "attribution": attribution})
                 continue
             resolved = [c for c in spanned if c.get("resolution") != "unresolved"]
             readings = [c for c in resolved if LINE_RULE.get(_relation(c)) == "reading"]
             if not readings and any(LINE_RULE.get(r) == "reading" for r in relations):
                 left_out.append({"item": index + 1, "field": span_field,
-                                 "rule": "reading-without-resolved-citation"})
+                                 "rule": "reading-without-resolved-citation",
+                                 "attribution": attribution})
                 continue
-            planned.append((field, span_field, text, resolved, readings))
+            cant_tell = [c for c in spanned
+                         if (c.get("span") or {}).get("sentence_relation_read") == "unknown"]
+            planned.append((field, span_field, text, resolved, readings, cant_tell, attribution))
         if heading_contradicted:
             omitted.append({"item": index + 1, "rule": "heading-span-contradicts"})
             continue
-        for field, span_field, text, resolved, readings in planned:
+        for field, span_field, text, resolved, readings, cant_tell, attribution in planned:
             second_check = second_checks.get(index, {}).get((span_field, text))
             if readings:
                 anchor = readings[0]
                 state, scope, relation = "reading", "line", _relation(anchor)
                 source = anchor.get("source")
+            elif cant_tell:
+                state, scope, relation = "cant_tell", "line", "undetermined"
+                source = cant_tell[0].get("source")
             elif second_check:
                 state, scope, relation = "supported", "line", None
                 source = second_check.get("source")
@@ -195,5 +231,5 @@ def line_states(brief: dict, second_checks: dict | None = None) -> dict:
                               "state": state, "label": LABEL[state], "state_scope": scope,
                               "relation": relation,
                               "through_line": THROUGH_LINE.get(relation) if relation else None,
-                              "source": source})
+                              "source": source, "attribution": attribution})
     return {"lines": lines_out, "omitted": omitted, "left_out": left_out}

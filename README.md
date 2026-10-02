@@ -75,19 +75,54 @@ Claim verdicts: `supported`, `partial`, `unsupported`, `unresolved` (pass 1 foun
 | `implies` `suggests` `connotes` `follows` `explains` `posits` `illustrates` | the writing takes a step beyond the source; the verb names the step | step-beyond | "our reading" (only when that citation resolved; otherwise the sentence is left out) |
 | `contradicts` | the source disagrees | contradicts | left out, never printed; on the claim sentence itself the whole item is omitted |
 | `undetermined` | the judge did not rate it | unrated | no line state of its own |
-| anything else | | see below | see below |
+| any other word from the judge | can't tell | unrated | "can't tell" at line level; never the claim's verdict, never supported |
 
-Every relation word is read by one function (`read_relation`): trimmed, lower-cased, and the
-aliases `stated`, `inferred`, `contradicted` read as `says`, `implies`, `contradicts` (a sentence
-span records the alias it came from in `sentence_relation_alias`). Any other word is handled in
-two ways, depending on where it appears:
+### Relation words
 
-- **From the judge** (a `span_relation` the judge returned): the word is **dropped** at intake.
-  The span is kept without a relation, and that sentence then carries its claim's verdict like a
-  `says` sentence. This is the composer's behaviour, kept on purpose: refusing would discard the
-  location the judge did find.
-- **In a brief handed to `line_states()`, `through_line()` or `line_rule()`** (a
-  `sentence_relation` that did not come through intake): **refused** with `UnknownRelation`.
+The judge is offered exactly the ten words above. When it answers with a near word anyway, one
+function, `read_relation`, reads it: trimmed, lower-cased, then sorted into an existing class by
+the one list in `claim_seal/relations.py` (`RELATION_SYNONYMS`):
+
+| the judge wrote | read as |
+|---|---|
+| states, stated, reports, reported, notes, noted, describes, described, writes, wrote, announces, announced, confirms, confirmed, said | `says` |
+| implied, infers, inferred, argues, argued | `implies` |
+| suggested, connoted, followed, explained, posited, illustrated | the matching step-beyond verb |
+| contradicted, refutes, refuted, denies, denied | `contradicts` |
+| **anything else** | **`undetermined`, marked unknown** |
+
+**The rule: an unknown word is can't tell, never supported.** A sentence span keeps the judge's
+word and how it was read (`sentence_relation_raw`, `sentence_relation_read`: `synonym` or
+`unknown`); an evidence row keeps them as `relation_raw`, `relation_read` (sealed). A sentence
+read from an unknown word shows as "can't tell" in `line_states()`: it never takes its claim's
+verdict and never prints as supported. (The judge's own `undetermined` keeps the published
+rule above: no line state of its own.) The claim guard, the evidence pass, the per-sentence
+intake and the page views all use this reader, so they cannot disagree. A relation word in a
+brief handed straight to `line_states()`, `through_line()` or `line_rule()` that is neither a
+vocabulary word nor a synonym is refused with `UnknownRelation`, because nothing says where it
+came from.
+
+### Attribution overclaim (a heuristic)
+
+A second, pure-code check reads the attribution verb the WRITING uses about its source in each
+checked sentence ("the report **says** ...", "the council **argued** ...") and compares it with
+the judge's relation for that sentence:
+
+| the writing's verb | the sentence's relation | flag |
+|---|---|---|
+| strong: says, said, states, stated, reports, reported, describes, described, writes, wrote, notes, noted, announces, announced, confirms, confirmed, shows, showed, found, finds | a step beyond (implies, suggests, ...) | `overclaim`: "says it, but the source only implies it" |
+| strong | contradicts | `misattribution` |
+| hedged: argues, argued, claims, claimed, suggests, suggested, believes, believed, predicts, predicted, proposes, proposed, expects, expected, thinks, speculates | says | `understated` (informational, not a problem) |
+| anything else, no verb, or an undetermined relation | | no flag |
+
+The verb is a whole-word, case-insensitive match. When the sentence names the cited source, the
+first listed verb after that name counts, otherwise the first in the sentence. A listed word right
+after "the", "its", "these" and similar is read as a noun ("the reports") and skipped. It is
+English only and a heuristic: an adjective before a plural noun ("annual reports") or an unrelated
+subject can still fool it. Each result is `{attribution_verb, attribution_strength, relation,
+flag, message}`, in `judge()`'s `result["attribution"]`, on every line of `line_states()`, and in
+the CLI report. **It never changes a verdict or what a page prints, and it is not part of the
+seal.**
 
 **A judge that names `contradicts` has said the source disagrees, and that wins over its verdict
 word.** When the claim-level answer is `supported` or `partial` with the relation `contradicts`:
@@ -129,10 +164,10 @@ a defaulted verb as the judge's own all break the chain, and `verify_seal()` ret
 
 **What it does not cover:** everything else in a `judge()` result. That includes the claim
 verdicts and their `why` in `result["brief"]`, the per-sentence spans with their relations and
-through-line labels, the line states a page derives from them, the run record in
-`result["verification"]`, and the record's own `verification.rule_ids` and
-`capture_time_result`. Changing any of those leaves `verify_seal()` True. Keep the whole result
-under version history if you need those fields witnessed too.
+through-line labels, the line states a page derives from them, the attribution-overclaim results
+(`result["attribution"]`), the run record in `result["verification"]`, and the record's own
+`verification.rule_ids` and `capture_time_result`. Changing any of those leaves `verify_seal()`
+True. Keep the whole result under version history if you need those fields witnessed too.
 
 **The limit, plainly:** the chain has no key. Anyone who can rewrite a row can recompute the
 chain and write the new value beside it, and `verify_seal()` will then pass (a test pins this).
@@ -200,9 +235,11 @@ Options: `--whole-brief`, `--no-spans`, `--no-local-placement`, `--no-evidence`,
 ## Demo (offline)
 
 `examples/` holds three short self-written source texts about an invented town, a brief with one
-claim of each kind (stated, step beyond, contradicted, fabricated citation) and recorded judge
-answers. The replay adapter returns those answers; it does not judge. Everything after the
-answers (resolution, span checks, evidence location, line states, the seal) runs for real.
+claim of each kind (stated, step beyond, contradicted, fabricated citation, and a sentence that
+attributes to its source more than the source says, flagged as an attribution overclaim) and
+recorded judge answers. The replay adapter returns those answers; it does not judge. Everything
+after the answers (resolution, span checks, evidence location, line states, the attribution
+check, the seal) runs for real.
 
 ```
 python3 -m claim_seal check examples/brief.json examples/sources.json \
@@ -244,8 +281,10 @@ The checking logic is the composer's. Its deployment flags became keyword argume
 registry became the plain sources format above; private identifiers were removed. Behaviour
 changes, each covered by a test: a `supported` or `partial` verdict paired with the relation
 `contradicts` is recorded `unsupported` (claim and evidence rows, the override named);
-every relation word is read by one shared reader (trimmed, with the `contradicted` alias) at the
-claim guard, the evidence pass and the per-sentence intake; `judge()` returns an annotated copy
+every relation word is read by one shared reader (trimmed, with a list of synonyms) at the
+claim guard, the evidence pass, the per-sentence intake and the page views, and an unknown word
+the judge uses for a sentence is "can't tell" instead of being dropped; the attribution-overclaim
+check is new; `judge()` returns an annotated copy
 instead of editing its input; source digests are taken when sources are handed in rather than
 by an HTTP fetcher. The composer's title-lineage checks for specific feed formats, its service
 checkpoints and its per-call usage telemetry are not included.

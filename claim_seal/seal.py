@@ -14,7 +14,7 @@ canonical() is JSON with sorted keys, no whitespace, UTF-8, non-ASCII kept as is
 WHAT IT DOES NOT COVER. Only record["outcomes"] is chained. The record's own
 verification.rule_ids and capture_time_result are not, and nothing outside the record is: not
 the claim verdicts and their reasons, not the per-sentence spans, relations or through-line
-labels in the annotated brief, not the run record. Editing those leaves verify_seal() True.
+labels in the annotated brief, not the attribution-overclaim results, not the run record. Editing those leaves verify_seal() True.
 
 WHAT IT DOES NOT DO. It is unkeyed: anyone who can rewrite a row can also recompute and rewrite
 the chain value beside it, and verify_seal() will then pass. It is therefore TAMPER-EVIDENT ONLY

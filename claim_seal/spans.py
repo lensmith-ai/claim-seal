@@ -253,17 +253,21 @@ def span_receipt(report: dict, verdicts: dict, brief: dict, *, local_placement: 
         fields = span_fields(brief, claim)
         span, reason = validate_span(fields, citation, matching[0])
         if span is not None:
-            # The judge's verb for the QUOTED sentence vs this source, read by the shared reader
-            # (an alias such as "contradicted" is read as its verb and marked); any other word is
-            # DROPPED, and the sentence then carries its claim's verdict. Attached before
-            # relocation on purpose: a RELOCATED mark sits on a sentence the judge never rated,
-            # so relocation loses the field rather than carrying a wrong rating.
+            # The judge's verb for the QUOTED sentence vs this source, read by the shared reader:
+            # a synonym is read as its verb; any other word is read as "undetermined" and marked
+            # unknown, so the sentence shows as can't tell and never takes the claim's verdict.
+            # The raw word and how it was read are kept whenever it was not a vocabulary verb.
+            # Attached before relocation on purpose: a RELOCATED mark sits on a sentence the judge
+            # never rated, so relocation loses the field rather than carrying a wrong rating.
             rel = matching[0].get("span_relation") if isinstance(matching[0], dict) else None
-            verb, how = read_relation(rel) if isinstance(rel, str) else (None, "unknown")
+            if rel is not None and not isinstance(rel, str):
+                rel = str(rel)
+            verb, how = read_relation(rel) if rel is not None else (None, "empty")
             if verb is not None:
                 span["sentence_relation"] = verb
-                if how == "alias":
-                    span["sentence_relation_alias"] = rel.strip().lower()
+                if how != "verb":
+                    span["sentence_relation_raw"] = rel.strip()[:60]
+                    span["sentence_relation_read"] = how
             # Local placement: a validated span that landed on the THESIS may move to the
             # supporting sentence the source text most overlaps. Only a span that EXISTS is moved;
             # the support verdict stays the judge's.

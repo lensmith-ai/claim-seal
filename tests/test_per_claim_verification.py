@@ -335,10 +335,11 @@ class SentenceRelations(unittest.TestCase):
                      "illustrates", "contradicts", "undetermined"):
             self.assertEqual(self._run(verb)["sentence_relation"], verb)
 
-    def test_a_verb_outside_the_vocabulary_is_dropped(self):
+    def test_a_word_outside_the_vocabulary_is_read_as_undetermined_and_kept(self):
         span = self._run("hallucinates")
         self.assertIsNotNone(span)
-        self.assertNotIn("sentence_relation", span)
+        self.assertEqual((span["sentence_relation"], span["sentence_relation_raw"],
+                          span["sentence_relation_read"]), ("undetermined", "hallucinates", "unknown"))
 
     def test_prompt_asks_only_per_claim(self):
         brief, sources = corpus()

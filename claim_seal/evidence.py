@@ -237,8 +237,6 @@ def judged_relation_and_strength(verdict: dict) -> tuple[str, int, str]:
         source = "compat-default"
         if how == "empty":
             relation = {"supported": "says", "partial": "implies"}.get(semantic, "undetermined")
-        elif how == "unknown":
-            relation = "undetermined"
     strength = verdict.get("strength")
     if not isinstance(strength, int) or isinstance(strength, bool) or not 0 <= strength <= 100:
         strength = 100 if relation == "says" else (25 if derive_coarse_relation(relation) == "inferred" else 0)
@@ -339,6 +337,12 @@ def build_claim_evidence(brief: dict, sources: dict, model_verdicts: dict | None
                        "corroboration": 0, "strength": strength,
                        "evidence_spans": [], "span_counts": {"proposed": 0, "located": 0},
                        "display_policy": {"text_retained": False, "text_displayable": False}}
+            raw_word = verdict.get("relation")
+            if read_relation(raw_word)[1] in ("synonym", "unknown"):
+                # Added in this library: the judge's own word and how it was read, kept in the
+                # (sealed) row whenever it was not a vocabulary verb.
+                outcome["relation_raw"] = str(raw_word).strip()[:60]
+                outcome["relation_read"] = read_relation(raw_word)[1]
             if binding is None:
                 append_outcome(binding, outcome)
                 continue

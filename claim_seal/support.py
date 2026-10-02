@@ -24,6 +24,7 @@ import json
 import re
 import time
 
+from .attribution import attribution_checks
 from .completion import complete_partials
 from .evidence import build_claim_evidence, capture_sources, evidence_candidates, source_lineage
 from .prompts import build_claim_prompt, build_prompt
@@ -468,7 +469,9 @@ def judge(brief: dict, sources: dict, model, *, spans: bool = True, sharded: boo
                          why, and citation rows (resolution, url, span with sentence_relation),
        "verification":   the run record (counts, model, timings, span receipt, shards),
        "claim_evidence": the sealed claim-evidence record (when evidence=True),
-       "lineage":        {"sources": one digest row per source item}}
+       "lineage":        {"sources": one digest row per source item},
+       "attribution":    attribution-overclaim results per spanned sentence (a heuristic;
+                         informational; not part of the seal)}
 
     Defaults are the configuration the composer runs in production: spans on, one claim per
     model call, local span placement on, the locating-quote wording off, the evidence pass on,
@@ -493,6 +496,9 @@ def judge(brief: dict, sources: dict, model, *, spans: bool = True, sharded: boo
     if evidence:
         result["claim_evidence"] = holder.get("claim_evidence")
     result["lineage"] = {"sources": source_lineage(captured)}
+    # Attribution overclaim (heuristic, informational, NOT sealed): see claim_seal.attribution.
+    result["attribution"] = attribution_checks(
+        doc, {sid: entry["label"] for sid, entry in load_sources(captured).items()})
     return result
 
 
