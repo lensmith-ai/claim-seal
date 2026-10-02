@@ -88,44 +88,35 @@ the one list in `claim_seal/relations.py` (`RELATION_SYNONYMS`):
 | states, stated, reports, reported, notes, noted, describes, described, writes, wrote, announces, announced, confirms, confirmed, said | `says` |
 | implied, infers, inferred, argues, argued | `implies` |
 | suggested, connoted, followed, explained, posited, illustrated | the matching step-beyond verb |
-| contradicted, refutes, refuted, denies, denied | `contradicts` |
+| contradicted, refutes, refuted, denies, denied, disputes, disputed, disagrees, disagreed, conflicts, rejects, rejected | `contradicts` |
 | **anything else** | **`undetermined`, marked unknown** |
 
-**The rule: an unknown word is can't tell, never supported.** A sentence span keeps the judge's
-word and how it was read (`sentence_relation_raw`, `sentence_relation_read`: `synonym` or
-`unknown`); an evidence row keeps them as `relation_raw`, `relation_read` (sealed). A sentence
-read from an unknown word shows as "can't tell" in `line_states()`: it never takes its claim's
-verdict and never prints as supported. (The judge's own `undetermined` keeps the published
-rule above: no line state of its own.) The claim guard, the evidence pass, the per-sentence
-intake and the page views all use this reader, so they cannot disagree. A relation word in a
-brief handed straight to `line_states()`, `through_line()` or `line_rule()` that is neither a
-vocabulary word nor a synonym is refused with `UnknownRelation`, because nothing says where it
-came from.
+**For a sentence, an unknown word is can't tell, never supported.** A sentence span keeps the
+judge's word and how it was read (`sentence_relation_raw`, `sentence_relation_read`: `synonym` or
+`unknown`). A sentence read from an unknown word shows as "can't tell" in `line_states()`: it
+never takes its claim's verdict and never prints as supported. (The judge's own `undetermined`
+keeps the published rule above: no line state of its own.)
 
-### Attribution overclaim (a heuristic)
+**For a claim, an unknown word is recorded, and the verdict word decides.** The claim-level
+relation is a judgement beside the verdict, not the verdict. An unknown word there is read as
+`undetermined` and kept on the evidence row (`relation: undetermined`, `relation_raw`,
+`relation_read: unknown`, all sealed); the claim's verdict is the judge's verdict word, and an
+evidence row is `supported` only when that word is `supported` and its passage was located. So a
+judge that answers `supported` with a word the list does not know (`supported` + `pondered`)
+leaves a supported claim, and its sentences print by the sentence rules above. Only `contradicts`
+and its synonyms change a claim verdict (below). We chose to record rather than override here:
+an unknown word is not evidence of disagreement.
 
-A second, pure-code check reads the attribution verb the WRITING uses about its source in each
-checked sentence ("the report **says** ...", "the council **argued** ...") and compares it with
-the judge's relation for that sentence:
+The claim guard, the evidence pass, the per-sentence intake and the page views all use this
+reader, so they cannot disagree. A relation word handed straight to `line_states()`,
+`through_line()` or `line_rule()` in a hand-built brief that is neither a vocabulary word nor a
+synonym is refused with `UnknownRelation`, because nothing says where it came from.
 
-| the writing's verb | the sentence's relation | flag |
-|---|---|---|
-| strong: says, said, states, stated, reports, reported, describes, described, writes, wrote, notes, noted, announces, announced, confirms, confirmed, shows, showed, found, finds | a step beyond (implies, suggests, ...) | `overclaim`: "says it, but the source only implies it" |
-| strong | contradicts | `misattribution` |
-| hedged: argues, argued, claims, claimed, suggests, suggested, believes, believed, predicts, predicted, proposes, proposed, expects, expected, thinks, speculates | says | `understated` (informational, not a problem) |
-| anything else, no verb, or an undetermined relation | | no flag |
+### Contradicts wins
 
-The verb is a whole-word, case-insensitive match. When the sentence names the cited source, the
-first listed verb after that name counts, otherwise the first in the sentence. A listed word right
-after "the", "its", "these" and similar is read as a noun ("the reports") and skipped. It is
-English only and a heuristic: an adjective before a plural noun ("annual reports") or an unrelated
-subject can still fool it. Each result is `{attribution_verb, attribution_strength, relation,
-flag, message}`, in `judge()`'s `result["attribution"]`, on every line of `line_states()`, and in
-the CLI report. **It never changes a verdict or what a page prints, and it is not part of the
-seal.**
-
-**A judge that names `contradicts` has said the source disagrees, and that wins over its verdict
-word.** When the claim-level answer is `supported` or `partial` with the relation `contradicts`:
+**A judge that names `contradicts` (or a synonym of it) has said the source disagrees, and that
+wins over its verdict word.** When the claim-level answer is `supported` or `partial` with the
+relation `contradicts`:
 
 - the claim verdict is recorded **`unsupported`**; the verification block carries
   `verdict_override: {"rule": "relation-contradicts", "judge_verdict": "supported" | "partial"}`
@@ -138,11 +129,60 @@ An `unsupported` verdict with `contradicts` stays as the judge gave it (rule
 `EVIDENCE-MODEL-UNSUPPORTED`). Separately, a sentence whose own relation is `contradicts` is left
 out whatever its claim's verdict. So `contradicts` never comes out supported or partly supported:
 not as a printed line, not in the sealed record, not as a claim verdict. Because every guard uses
-the same reader, `"contradicts "`, `"Contradicts"` and the alias `"contradicted"` all count.
+the same reader, `"contradicts "`, `"Contradicts"` and every synonym in the table count.
 
-This rule was measured, not assumed: in a preregistered agreement test on public refutation
-items, 6 of 80 came back `partial` + `contradicts`. An earlier version recorded such claims as
-`unchecked`, which hid real refutations.
+With the evidence pass on (the default) the prompt asks the judge for the claim-level relation.
+With it off (`evidence=False`, `--no-evidence`) the prompt does not ask, so the override fires
+only when a judge volunteers the relation anyway; the library keeps that relation on both paths
+so a volunteered `contradicts` is never ignored. Sentence-level relations are asked for whenever
+spans are on.
+
+This rule was measured, not assumed: in an internal, preregistered agreement test on public
+refutation items (not yet published), 6 of 80 came back `partial` + `contradicts`. An earlier
+version recorded such claims as `unchecked`, which hid real refutations.
+
+### Attribution overclaim (a heuristic)
+
+A second, pure-code check reads the attribution verb the WRITING uses about its source and
+compares it with the judge's relation for that sentence. It runs only on item sentences that
+carry a validated per-sentence span (the claim, its why-it-matters or a detail); analysis
+statements, the connection, and sentences no span landed on are not checked.
+
+| the writing's verb | the sentence's relation | flag and message |
+|---|---|---|
+| strong: says, said, states, stated, reports, reported, describes, described, writes, wrote, notes, noted, announces, announced, confirms, confirmed, shows, showed, found, finds | a step beyond (implies, suggests, ...) | `overclaim`: "possible overclaim: the writing says the source states it, but the source only implies it ..." |
+| strong | contradicts | `misattribution`: "possible misattribution: ..." |
+| hedged: argues, argued, claims, claimed, suggests, suggested, believes, believed, predicts, predicted, proposes, proposed, expects, expected, thinks, thought, speculates, speculated | says | `understated` (informational, not a problem) |
+| anything else, no verb, or an undetermined relation | | no flag |
+
+**Treat a flag as a prompt to reread the sentence, not as a finding.** It is English only and
+a heuristic. The verb is a whole-word, case-insensitive match; when the sentence names the cited
+source, the first listed verb after that name counts, otherwise the first in the sentence. These
+cases are handled in code (each has a test):
+
+- a listed word right after "the", "its", "these" and similar is a noun ("the reports");
+- a listed word that opens the sentence is a plural-noun subject ("Reports show ...");
+- the compounds "United States", "Member states", "TV shows", and hyphenated words
+  ("Lost-and-found"), are skipped;
+- a listed word inside the cited source's own name is skipped ("Council Notes");
+- a listed word inside quotation marks is quoted speech, not the writing's attribution;
+- a negation among the three words before the verb skips it ("never said", "has not
+  confirmed"); the negations are not, never, no, didn't, hasn't, doesn't, don't, isn't, wasn't,
+  won't;
+- a sentence ending in "?" is not checked.
+
+Known misfires that remain:
+
+- a verb about someone other than the source ("The mayor says ..."), including one placed
+  after the source's name ("Harbour Press, which the mayor says is biased, noted ...");
+- a plural noun after an adjective or another noun ("Recent reports show", "Police notes");
+- the passive "It was found that ...";
+- a negation further away ("Nothing in Harbour Press states ...");
+- hedges not on the list ("estimates", "warns", "insists").
+
+Each result is `{attribution_verb, attribution_strength, relation, flag, message}`. Results
+appear in `judge()`'s `result["attribution"]`, on every line of `line_states()`, and in the CLI
+report. **It never changes a verdict or what a page prints, and it is not part of the seal.**
 
 ## The seal and its limits
 

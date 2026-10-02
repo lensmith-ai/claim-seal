@@ -140,7 +140,10 @@ def _shard_verdict_payload(v: dict, *, citation_spans_enabled: bool, claim_evide
         **({"citation_bears": v.get("citation_bears")}
            if isinstance(v.get("citation_bears"), list) else {}),
         **({"citation_spans": v.get("citation_spans")} if citation_spans_enabled else {}),
-        **({"relation": v.get("relation"), "strength": v.get("strength"),
+        # Kept on both paths (added in this library): the contradicts override reads it even
+        # when the evidence pass is off and the prompt did not ask for it.
+        "relation": v.get("relation"),
+        **({"strength": v.get("strength"),
             "evidence_spans": v.get("evidence_spans"),
             "multi_span_required": v.get("multi_span_required")}
            if claim_evidence else {})}
@@ -323,7 +326,9 @@ def verify(brief: dict, sources: dict, receipts: dict, model, *,
                         "verdict": str(v.get("verdict") or "").lower(),
                         "why": str(v.get("why") or "")[:200],
                         **({"citation_spans": v.get("citation_spans")} if citation_spans_enabled else {}),
-                        **({"relation": v.get("relation"), "strength": v.get("strength"),
+                        # Kept on both paths (added in this library): see _shard_verdict_payload.
+                        "relation": v.get("relation"),
+                        **({"strength": v.get("strength"),
                             "evidence_spans": v.get("evidence_spans"),
                             "multi_span_required": v.get("multi_span_required")}
                            if claim_evidence_candidates is not None else {})}

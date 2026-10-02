@@ -20,8 +20,11 @@ Three views of the same closed vocabulary live here, so they cannot drift apart:
                                 None (no line-level state of its own), "reading" (printed as
                                 "our reading"), or "left-out" (never printed)
 
-An unknown word is REFUSED (UnknownRelation), never mapped to a default: a page that guessed
-would print a state nobody chose.
+Reading a judge's word: read_relation() trims and lower-cases it, reads the synonyms in
+RELATION_SYNONYMS as the verb they name, and reads ANY OTHER word as "undetermined", marked
+unknown ("can't tell": never read as support). The three table views above are stricter: handed
+a word that is neither a vocabulary verb nor a synonym directly, they REFUSE it (UnknownRelation)
+instead of guessing, because nothing says where it came from.
 """
 from __future__ import annotations
 
@@ -75,7 +78,9 @@ RELATION_SYNONYMS = {
     "suggested": "suggests", "connoted": "connotes", "followed": "follows",
     "explained": "explains", "posited": "posits", "illustrated": "illustrates",
     # disagrees -> contradicts
-    **{w: "contradicts" for w in ("contradicted", "refutes", "refuted", "denies", "denied")},
+    **{w: "contradicts" for w in ("contradicted", "refutes", "refuted", "denies", "denied",
+                                  "disputes", "disputed", "disagrees", "disagreed", "conflicts",
+                                  "rejects", "rejected")},
 }
 # Kept for callers of the earlier name: the three composer aliases are synonyms now.
 RELATION_ALIASES = {w: RELATION_SYNONYMS[w] for w in ("stated", "inferred", "contradicted")}
@@ -151,6 +156,14 @@ def item_lines(item: dict) -> list:
     return lines
 
 
+def _safe_check(check_span, item, citation, labels):
+    """The attribution heuristic is informational: it must never stop a page from rendering."""
+    try:
+        return check_span(item, citation, labels)
+    except Exception:  # noqa: BLE001 - a heuristic failure is no result, never a crash
+        return None
+
+
 def line_states(brief: dict, second_checks: dict | None = None, labels: dict | None = None) -> dict:
     """Decide what a reader-facing page may print for every line of a judged brief.
 
@@ -190,7 +203,7 @@ def line_states(brief: dict, second_checks: dict | None = None, labels: dict | N
         for field, span_field, text in item_lines(item):
             spanned = [c for c in citations if (c.get("span") or {}).get("field") == span_field]
             relations = [_relation(c) for c in spanned]
-            attribution = [r for r in (check_span(item, c, labels) for c in spanned) if r]
+            attribution = [r for r in (_safe_check(check_span, item, c, labels) for c in spanned) if r]
             if "contradicts" in relations:
                 if field == "insight":
                     heading_contradicted = True
@@ -212,7 +225,10 @@ def line_states(brief: dict, second_checks: dict | None = None, labels: dict | N
             omitted.append({"item": index + 1, "rule": "heading-span-contradicts"})
             continue
         for field, span_field, text, resolved, readings, cant_tell, attribution in planned:
-            second_check = second_checks.get(index, {}).get((span_field, text))
+            try:
+                second_check = second_checks.get(index, {}).get((span_field, text))
+            except TypeError:  # a hand-built line that is not text (a dict, a list) has no second check
+                second_check = None
             if readings:
                 anchor = readings[0]
                 state, scope, relation = "reading", "line", _relation(anchor)

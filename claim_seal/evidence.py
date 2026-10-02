@@ -220,7 +220,9 @@ def evidence_candidates(brief: dict, sources: dict, *, enabled: bool = True) -> 
 
 # ------------------------------------------------------------------ the record
 def judged_relation_and_strength(verdict: dict) -> tuple[str, int, str]:
-    """Accept only closed judged verbs; unreadable input is never a definite negative.
+    """Read the judge's relation word through read_relation; unreadable input is never a definite
+    negative. A vocabulary verb is the judge's; a synonym is read as its verb and an unknown word as
+    "undetermined", both marked compat-default (and kept raw on the row by the caller).
 
     Returns the verb, the strength, and WHERE THE VERB CAME FROM ("judge" or "compat-default").
     A verdict of "partial" tells us the claim is inferential; it does not tell us the writer meant

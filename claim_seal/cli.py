@@ -58,7 +58,7 @@ def _attribution_text(row: dict) -> str:
     if not verb:
         return "attribution: none found"
     text = f'attribution: "{verb}" ({row["attribution_strength"]}) vs relation {row.get("relation") or "-"}'
-    return text + (f' -> {row["flag"]}: {row["message"]}' if row.get("flag") else " -> no flag")
+    return text + (f' -> {row["message"]}' if row.get("flag") else " -> no flag")
 
 
 def _print_report(result: dict, out, labels: dict | None = None) -> None:
@@ -102,14 +102,18 @@ def _print_report(result: dict, out, labels: dict | None = None) -> None:
               f"({line['state_scope']}): {line['text']}\n")
             for row in line.get("attribution") or []:
                 if row.get("flag"):
-                    w(f"      attribution {row['flag']}: {row['message']}\n")
+                    w(f"      attribution: {row['message']}\n")
         for row in states["omitted"]:
             w(f"  item {row['item']} omitted: {row['rule']}\n")
         for row in states["left_out"]:
             w(f"  item {row['item']} [{row['field']}] left out: {row['rule']}\n")
             for found in row.get("attribution") or []:
                 if found.get("flag"):
-                    w(f"      attribution {found['flag']}: {found['message']}\n")
+                    w(f"      attribution: {found['message']}\n")
+        if any(r.get("flag") for row in states["lines"] + states["left_out"]
+               for r in row.get("attribution") or []):
+            w("  note: attribution flags come from an English-only heuristic (claim_seal.attribution); "
+              "treat a flag as a prompt to reread the sentence, not as a finding\n")
     evidence = result.get("claim_evidence")
     if evidence:
         found = evidence["verification"]["seal"]

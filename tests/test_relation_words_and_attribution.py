@@ -20,7 +20,8 @@ SAYS = ("states", "stated", "reports", "reported", "notes", "noted", "describes"
         "wrote", "announces", "announced", "confirms", "confirmed", "says", "said")
 STEP = {"infers": "implies", "inferred": "implies", "argues": "implies", "argued": "implies",
         **{v: v for v in ("implies", "suggests", "connotes", "follows", "explains", "posits", "illustrates")}}
-DISAGREES = ("contradicts", "contradicted", "refutes", "refuted", "denies", "denied")
+DISAGREES = ("contradicts", "contradicted", "refutes", "refuted", "denies", "denied", "disputes", "disputed",
+             "disagrees", "disagreed", "conflicts", "rejects", "rejected")
 
 
 class RelationWordTests(unittest.TestCase):
@@ -193,3 +194,135 @@ class AttributionInPipelineTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Round6AttributionFixes(unittest.TestCase):
+    NAMES = ["Harbour Press", "Bridge reopens", "press"]
+
+    def find(self, sentence, names=None):
+        return find_attribution(sentence, self.NAMES if names is None else names)
+
+    def test_negation_within_three_words_skips_the_verb(self):
+        for sentence in ("Harbour Press never said traffic will double.",
+                         "Harbour Press has not confirmed the date.",
+                         "Harbour Press did not report it, and never stated it.",
+                         "Harbour Press didn't say so; it hasn't noted a date.",
+                         "Harbour Press doesn’t claim a figure."):
+            self.assertEqual(self.find(sentence), (None, None), sentence)
+        # a negation further away is a documented misfire, pinned so the README stays honest
+        self.assertEqual(self.find("Nothing in Harbour Press states that tolls will rise."), ("states", "strong"))
+
+    def test_quoted_speech_is_skipped(self):
+        self.assertEqual(self.find('"We said it would double," the mayor told Harbour Press.'), (None, None))
+        self.assertEqual(self.find("“We confirmed it,” an official told Harbour Press."), (None, None))
+        self.assertEqual(self.find('The mayor said "traffic will double", Harbour Press reports.'),
+                         ("reports", "strong"))
+
+    def test_questions_are_not_checked(self):
+        for sentence in ("Who said traffic will double?", "Does Harbour Press say it will double? ",
+                         "Why does the council claim delays?"):
+            self.assertEqual(self.find(sentence), (None, None), sentence)
+
+    def test_sentence_initial_plural_nouns_and_known_compounds(self):
+        for sentence in ("Reports show traffic doubled.", "Notes from May mention it.",
+                         "The United States sent engineers.", "Member states agreed on funding.",
+                         "TV shows covered the reopening.", "Lost-and-found desks reopened."):
+            self.assertEqual(self.find(sentence), (None, None), sentence)
+        # documented misfires that remain
+        self.assertEqual(self.find("Recent reports show traffic doubled."), ("reports", "strong"))
+        self.assertEqual(self.find("It was found that the deck was unsafe."), ("found", "strong"))
+
+    def test_a_listed_word_inside_the_source_name_is_skipped(self):
+        names = ["Council Notes"]
+        self.assertEqual(find_attribution("Council Notes: traffic will double.", names), (None, None))
+        self.assertEqual(find_attribution("Council Notes reported a delay.", names), ("reported", "strong"))
+        self.assertEqual(find_attribution("Council Notes: traffic will double.", []), ("Notes", "strong"))
+
+    def test_hedged_past_forms(self):
+        self.assertEqual(self.find("Harbour Press speculated that traffic would double."), ("speculated", "hedged"))
+        self.assertEqual(self.find("Harbour Press thought traffic would double."), ("thought", "hedged"))
+        self.assertEqual(self.find("The thought was idle."), (None, None))
+        for present, past in (("argues", "argued"), ("claims", "claimed"), ("suggests", "suggested"),
+                              ("believes", "believed"), ("predicts", "predicted"), ("proposes", "proposed"),
+                              ("expects", "expected"), ("thinks", "thought"), ("speculates", "speculated")):
+            self.assertIn(present, HEDGED)
+            self.assertIn(past, HEDGED)
+
+    def test_messages_say_possible_and_carry_the_reread_note(self):
+        over = judge_attribution("says", "strong", "implies")["message"]
+        mis = judge_attribution("said", "strong", "contradicts")["message"]
+        self.assertTrue(over.startswith("possible overclaim:"))
+        self.assertTrue(mis.startswith("possible misattribution:"))
+        for message in (over, mis):
+            self.assertIn("treat a flag as a prompt to reread the sentence, not as a finding", message)
+        self.assertTrue(judge_attribution("argued", "hedged", "says")["message"].startswith("understated"))
+
+    def test_line_states_never_crashes_on_non_string_text(self):
+        for insight in (5, {"t": "x"}, None, ["a"]):
+            brief = {"items": [{"insight": insight, "verification": {"verdict": "supported", "citations": [
+                {"source": "s", "resolution": "exact",
+                 "span": {"field": "insight", "start": 0, "sentence_relation": "says"}}]}}]}
+            out = line_states(brief)
+            self.assertEqual([l["state"] for l in out["lines"]], ["supported"], repr(insight))
+            self.assertEqual([r["flag"] for r in out["lines"][0]["attribution"] if r["flag"]], [], repr(insight))
+
+    def test_check_span_itself_returns_nothing_for_non_string_text(self):
+        from claim_seal.attribution import check_span
+        for text in (5, {"t": "x"}, ["a"]):
+            citation = {"source": "s", "span": {"field": "insight", "start": 0, "sentence_relation": "says"}}
+            self.assertIsNone(check_span({"insight": text}, citation), repr(text))
+            citation = {"source": "s", "span": {"field": "detail[0]", "start": 0, "sentence_relation": "says"}}
+            self.assertIsNone(check_span({"insight": "x", "detail": [text]}, citation), repr(text))
+
+    def test_line_states_survives_a_heuristic_that_raises(self):
+        import claim_seal.attribution as attribution_module
+        original = attribution_module.check_span
+        attribution_module.check_span = lambda *a, **k: 1 / 0
+        try:
+            out = line_states({"items": [{"insight": "Harbour Press says so.", "verification": {
+                "verdict": "supported", "citations": [{"source": "s", "resolution": "exact", "span": {
+                    "field": "insight", "start": 0, "sentence_relation": "implies"}}]}}]})
+        finally:
+            attribution_module.check_span = original
+        self.assertEqual([l["state"] for l in out["lines"]], ["reading"])
+
+
+class Round6ClaimLevelTests(unittest.TestCase):
+    SRC = {"press": {"label": "Harbour Press", "items": [
+        {"title": "Bridge reopens", "text": "The harbour bridge reopened on Monday after six weeks of repairs."}]}}
+
+    def run_reply(self, verdict, relation, **kw):
+        doc = {"items": [{"insight": "The bridge reopened on Monday.", "detail": ["Repairs took six weeks."],
+                          "sources": [{"id": "press", "ref": "Bridge reopens"}]}]}
+        reply = {"verdicts": [{"claim": 1, "verdict": verdict, "why": "w", "relation": relation, "strength": 70,
+                               "citation_spans": [{"citation_index": 0, "span_quote": "Repairs took six weeks",
+                                                   "span_relation": "says"}],
+                               "evidence_spans": [{"citation_index": 0, "support_span": "reopened on Monday"}]}]}
+        return judge(doc, self.SRC, fixed(reply), local_placement=False, **kw)
+
+    def test_new_disagreement_synonyms_override_at_claim_level(self):
+        for word in ("disputes", "Disputed ", "disagrees", "disagreed", "CONFLICTS", "rejects", "rejected"):
+            self.assertEqual(read_relation(word), ("contradicts", "synonym"), word)
+            for verdict in ("supported", "partial"):
+                result = self.run_reply(verdict, word)
+                self.assertEqual(result["brief"]["items"][0]["verification"]["verdict"], "unsupported", (word, verdict))
+                self.assertEqual(line_states(result["brief"])["lines"], [])
+
+    def test_an_unknown_claim_level_word_is_recorded_and_the_verdict_word_decides(self):
+        result = self.run_reply("supported", "pondered")
+        self.assertEqual(result["brief"]["items"][0]["verification"]["verdict"], "supported")
+        row = result["claim_evidence"]["outcomes"][0]
+        self.assertEqual((row["support_state"], row["relation"], row["relation_raw"], row["relation_read"]),
+                         ("supported", "undetermined", "pondered", "unknown"))
+        self.assertTrue(verify_seal(result["claim_evidence"]))
+
+    def test_the_override_works_without_the_evidence_pass(self):
+        for verdict in ("supported", "partial"):
+            for sharded in (True, False):
+                result = self.run_reply(verdict, "contradicts", evidence=False, sharded=sharded)
+                self.assertNotIn("claim_evidence", result)
+                self.assertEqual(result["brief"]["items"][0]["verification"]["verdict"], "unsupported",
+                                 (verdict, sharded))
+                self.assertEqual(line_states(result["brief"])["lines"], [])
+        plain = self.run_reply("partial", "suggests", evidence=False)
+        self.assertEqual(plain["brief"]["items"][0]["verification"]["verdict"], "partial")
