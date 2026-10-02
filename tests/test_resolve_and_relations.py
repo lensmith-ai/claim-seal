@@ -8,8 +8,8 @@ import unittest
 import helpers  # noqa: F401
 from helpers import fixed
 
-from claim_seal import (LINE_RULE, SPAN_RELATIONS, THROUGH_LINE, SourceError, UnknownRelation,
-                        judge, line_rule, line_states, resolve, resolve_only, through_line, verify_seal)
+from claim_seal import (GOES_FURTHER, LINE_RULE, SPAN_RELATIONS, SourceError, UnknownRelation,
+                        goes_further, judge, line_rule, line_states, resolve, resolve_only, verify_seal)
 from claim_seal.completion import complete_partials
 from claim_seal.evidence import capture_sources, digests_for, source_lineage
 from claim_seal.normalize import NORMALIZER_ID, normalize
@@ -87,29 +87,29 @@ class RelationTableTests(unittest.TestCase):
     """Each relation maps exactly as the published table says (the finished-page rule)."""
 
     TABLE = {
-        "says": ("states", None), "undetermined": ("unrated", None),
-        "implies": ("step-beyond", "reading"), "suggests": ("step-beyond", "reading"),
-        "connotes": ("step-beyond", "reading"), "follows": ("step-beyond", "reading"),
-        "explains": ("step-beyond", "reading"), "posits": ("step-beyond", "reading"),
-        "illustrates": ("step-beyond", "reading"),
+        "says": ("says it", None), "undetermined": ("unrated", None),
+        "implies": ("goes further", "reading"), "suggests": ("goes further", "reading"),
+        "connotes": ("goes further", "reading"), "follows": ("goes further", "reading"),
+        "explains": ("goes further", "reading"), "posits": ("goes further", "reading"),
+        "illustrates": ("goes further", "reading"),
         "contradicts": ("contradicts", "left-out"),
     }
 
     def test_every_relation_maps_as_the_table_says(self):
         self.assertEqual(set(self.TABLE), set(SPAN_RELATIONS))
         for verb, (line, rule) in self.TABLE.items():
-            self.assertEqual(through_line(verb), line, verb)
+            self.assertEqual(goes_further(verb), line, verb)
             self.assertEqual(line_rule(verb), rule, verb)
-        self.assertEqual(set(THROUGH_LINE), set(SPAN_RELATIONS))
+        self.assertEqual(set(GOES_FURTHER), set(SPAN_RELATIONS))
         self.assertEqual(set(LINE_RULE), set(SPAN_RELATIONS))
 
     def test_case_and_space_are_tolerated(self):
-        self.assertEqual(through_line(" Implies "), "step-beyond")
+        self.assertEqual(goes_further(" Implies "), "goes further")
 
     def test_unknown_words_are_refused(self):
         for word in ("hallucinates", "pondered", "supports", "", None, "says-ish"):
             with self.assertRaises(UnknownRelation):
-                through_line(word)
+                goes_further(word)
             with self.assertRaises(UnknownRelation):
                 line_rule(word)
 
@@ -217,8 +217,8 @@ class LineStateTests(unittest.TestCase):
         for verb in ("implies", "suggests", "connotes", "follows", "explains", "posits", "illustrates"):
             out = line_states(judged("supported", [("why_it_matters", "carries", verb, "exact")]))
             line = next(l for l in out["lines"] if l["field"] == "why_it_matters")
-            self.assertEqual((line["state"], line["label"], line["through_line"]),
-                             ("reading", "our reading", "step-beyond"), verb)
+            self.assertEqual((line["state"], line["label"], line["goes_further"]),
+                             ("reading", "our reading", "goes further"), verb)
 
     def test_a_reading_needs_a_resolved_citation(self):
         out = line_states(judged("supported", [("why_it_matters", "carries", "implies", "unresolved")]))

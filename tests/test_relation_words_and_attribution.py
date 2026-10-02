@@ -13,7 +13,7 @@ from claim_seal import judge, line_states, verify_seal
 from claim_seal.attribution import HEDGED, STRONG, find_attribution, judge_attribution
 from claim_seal.evidence import build_claim_evidence, capture_sources
 from claim_seal.prompts import build_prompt
-from claim_seal.relations import RELATION_SYNONYMS, SPAN_RELATIONS, read_relation, through_line
+from claim_seal.relations import RELATION_SYNONYMS, SPAN_RELATIONS, goes_further, read_relation
 from claim_seal.resolve import resolve
 
 SAYS = ("states", "stated", "reports", "reported", "notes", "noted", "describes", "described", "writes",
@@ -36,7 +36,7 @@ class RelationWordTests(unittest.TestCase):
         for word, verb in STEP.items():
             for form in (word, " " + word.upper() + " "):
                 self.assertEqual(read_relation(form)[0], verb, repr(form))
-                self.assertEqual(through_line(form), "step-beyond")
+                self.assertEqual(goes_further(form), "goes further")
         for verb in ("implies", "suggests", "connotes", "follows", "explains", "posits", "illustrates"):
             self.assertEqual(read_relation(verb), (verb, "verb"))
 

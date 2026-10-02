@@ -5,12 +5,12 @@ verdicts: {"supported": 1, "partial": 2, "unsupported": 1, "unresolved": 1, "unc
     why: Millbrook Town Council notice states the 9 p.m. weekday opening from March.
     cite 0: council / 'Library hours extended from March' -> exact
         span [why_it_matters] 'funded for one year'
-        relation: says  through line: states  (placed by model-exact-quote-v1)
+        relation: says  goes further?: says it  (placed by model-exact-quote-v1)
         attribution: none found
         bears: The council notice announces the later weekday closing and its one-year funding, which is the claim itself.
     cite 1: library / 'Annual report: visits and lending' -> exact
         span [detail[0]] 'Evening visits were already the busiest part of the day'
-        relation: says  through line: states  (placed by model-exact-quote-v1)
+        relation: says  goes further?: says it  (placed by model-exact-quote-v1)
         attribution: none found
         bears: The report shows visits concentrated in the evening, which supports the detail but not the new hours.
 
@@ -18,12 +18,12 @@ verdicts: {"supported": 1, "partial": 2, "unsupported": 1, "unresolved": 1, "unc
     why: Millbrook Library annual report shows full evening rooms; that longer hours lift visits is an inference.
     cite 0: library / 'Annual report: visits and lending' -> exact
         span [why_it_matters] 'the extra hours meet demand rather than create it'
-        relation: implies  through line: step-beyond  (placed by model-exact-quote-v1)
+        relation: implies  goes further?: goes further  (placed by model-exact-quote-v1)
         attribution: none found
         bears: The report records crowded evenings; the brief infers that more evening hours would absorb that demand.
     cite 1: survey / 'Survey: what residents want from the library' -> exact
         span [detail[0]] 'Weekend demand is even stronger than evening demand.'
-        relation: contradicts  through line: contradicts  (placed by model-exact-quote-v1)
+        relation: contradicts  goes further?: contradicts  (placed by model-exact-quote-v1)
         attribution: none found
         bears: The survey finds little appetite for weekend visits, which cuts against the detail about weekend demand.
 
@@ -31,7 +31,7 @@ verdicts: {"supported": 1, "partial": 2, "unsupported": 1, "unresolved": 1, "unc
     why: Residents' survey says 61 percent wanted weekday evenings and only 9 percent weekends.
     cite 0: survey / 'Survey: what residents want from the library' -> exact
         span [insight] 'asked for weekend opening rather than evenings'
-        relation: contradicts  through line: contradicts  (placed by model-exact-quote-v1)
+        relation: contradicts  goes further?: contradicts  (placed by model-exact-quote-v1)
         attribution: none found
         bears: The survey reports the opposite preference: evenings, not weekends.
 
@@ -43,7 +43,7 @@ verdicts: {"supported": 1, "partial": 2, "unsupported": 1, "unresolved": 1, "unc
     why: Millbrook Library annual report shows evening visits rising, not that the library will be the busiest building.
     cite 0: library / 'Annual report: visits and lending' -> exact
         span [detail[0]] 'the extra evening hours will make it the busiest building in town'
-        relation: implies  through line: step-beyond  (placed by model-exact-quote-v1)
+        relation: implies  goes further?: goes further  (placed by model-exact-quote-v1)
         attribution: "says" (strong) vs relation implies -> possible overclaim: the writing says the source states it ("says"), but the source only implies it, as the judge read it; treat a flag as a prompt to reread the sentence, not as a finding
         bears: The report records rising evening visits; it says nothing about other buildings, so the ranking is an inference.
 
@@ -63,5 +63,5 @@ what a reader-facing page may print:
 
 claim-evidence rows: 7  states: {"supported": 1, "unresolved": 4, "unsupported": 1, "unknown": 1}
 seal: sha256-digest-chain/v1 b49f3d110394e4fc6f9c0c8b88356c213a089a729dd024f5959c636c12882900  (unkeyed; tamper-evident only alongside version history; not a signature)
-seal covers: the claim-evidence rows (outcome, span, verb, judge-chose flag, binding); not the verdicts, sentence relations, through-line labels, attribution flags or rule ids above
+seal covers: the claim-evidence rows (outcome, span, verb, judge-chose flag, binding); not the verdicts, sentence relations, goes-further labels, attribution flags or rule ids above
 seal recomputes: yes

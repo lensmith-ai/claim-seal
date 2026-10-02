@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import re
 
-from .relations import THROUGH_LINE, read_relation
+from .relations import GOES_FURTHER, read_relation
 
 STRONG = ("says", "said", "states", "stated", "reports", "reported", "describes", "described",
           "writes", "wrote", "notes", "noted", "announces", "announced", "confirms", "confirmed",
@@ -132,8 +132,8 @@ def judge_attribution(verb: str | None, strength: str | None, relation: str | No
            "flag": None, "message": None}
     if not verb or not relation:
         return out
-    line = THROUGH_LINE.get(relation)
-    if strength == "strong" and line == "step-beyond":
+    line = GOES_FURTHER.get(relation)
+    if strength == "strong" and line == "goes further":
         out.update(flag="overclaim",
                    message=f'possible overclaim: the writing says the source states it ("{verb}"), '
                            f"but the source only {relation} it, as the judge read it; {REREAD_NOTE}")
@@ -141,7 +141,7 @@ def judge_attribution(verb: str | None, strength: str | None, relation: str | No
         out.update(flag="misattribution",
                    message=f'possible misattribution: the writing says the source states it ("{verb}"), '
                            f"but the source contradicts it, as the judge read it; {REREAD_NOTE}")
-    elif strength == "hedged" and line == "states":
+    elif strength == "hedged" and line == "says it":
         out.update(flag="understated",
                    message=f'understated (informational, not a problem): the writing hedges ("{verb}"), '
                            "but the source states it, as the judge read it")

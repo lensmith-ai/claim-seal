@@ -17,7 +17,7 @@ import sys
 
 from .adapters import AdapterError, OpenAICompatible, ReplayJudge
 from .support import judge
-from .relations import THROUGH_LINE, UnknownRelation, line_states
+from .relations import GOES_FURTHER, UnknownRelation, line_states
 from .attribution import check_span
 from .resolve import SourceError, load_sources, resolve_only
 from .seal import seal_problem
@@ -79,9 +79,9 @@ def _print_report(result: dict, out, labels: dict | None = None) -> None:
             span = cite.get("span")
             if span:
                 rel = span.get("sentence_relation")
-                label = THROUGH_LINE.get(rel, "-") if rel else "unrated (no relation)"
+                label = GOES_FURTHER.get(rel, "-") if rel else "unrated (no relation)"
                 line += (f"\n        span [{span['field']}] {span['quote']!r}"
-                         f"\n        relation: {rel or '-'}  through line: {label}"
+                         f"\n        relation: {rel or '-'}  goes further?: {label}"
                          f"  (placed by {span['producer']})")
             if span:
                 found = check_span(obj, cite, labels)
@@ -94,7 +94,7 @@ def _print_report(result: dict, out, labels: dict | None = None) -> None:
     try:
         states = line_states(brief, labels=labels)
     except UnknownRelation as exc:
-        w(f"through-line page states refused: {exc}\n")
+        w(f"goes-further page states refused: {exc}\n")
     else:
         w("what a reader-facing page may print:\n")
         for line in states["lines"]:
@@ -122,7 +122,7 @@ def _print_report(result: dict, out, labels: dict | None = None) -> None:
         w(f"seal: {found['algorithm']} {found['value']}  (unkeyed; tamper-evident only "
           f"alongside version history; not a signature)\n")
         w("seal covers: the claim-evidence rows (outcome, span, verb, judge-chose flag, binding); "
-          "not the verdicts, sentence relations, through-line labels, attribution flags or rule "
+          "not the verdicts, sentence relations, goes-further labels, attribution flags or rule "
           "ids above\n")
         problem = seal_problem(evidence)
         w(f"seal recomputes: {'yes' if problem is None else 'NO - ' + problem}\n")
@@ -199,7 +199,7 @@ def cmd_verify_seal(args) -> int:
             passed += 1
             print(f"OK         {path}: claim_evidence.outcomes: {len(record['outcomes'])} rows recompute "
                   "(outcome, span, verb, judge-chose flag, binding). Not sealed: claim verdicts, "
-                  "per-sentence relations and through-line labels, rule ids, other fields of this file")
+                  "per-sentence relations and goes-further labels, rule ids, other fields of this file")
         else:
             failed += 1
             print(f"CHAIN FAIL {path}: {problem}")

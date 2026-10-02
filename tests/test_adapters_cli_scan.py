@@ -162,7 +162,7 @@ class DemoTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("claim_evidence.outcomes: 7 rows recompute", text)
         self.assertIn("(outcome, span, verb, judge-chose flag, binding)", text)
-        self.assertIn("Not sealed: claim verdicts, per-sentence relations and through-line labels, rule ids", text)
+        self.assertIn("Not sealed: claim verdicts, per-sentence relations and goes-further labels, rule ids", text)
 
     def test_a_sealed_record_with_its_rows_removed_or_nulled_fails(self):
         with tempfile.TemporaryDirectory() as tmp:

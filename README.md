@@ -1,11 +1,11 @@
 # claim-seal
 
 Check each claim in a piece of writing against the sources it cites. Record, sentence by
-sentence, where the writing states what a source says and where it takes a step beyond it (its
-"through line"). Seal the claim-evidence rows (per claim and citation: the outcome, the located
+sentence, whether the writing says what a source says, goes further than it, or contradicts it
+(the "goes further" check). Seal the claim-evidence rows (per claim and citation: the outcome, the located
 source passages, the relation verb, whether the judge chose that verb, and the source binding)
 in a SHA-256 digest chain, so a later edit to those rows shows. The seal does NOT cover the claim
-verdicts and their reasons, the per-sentence relations and through-line labels, or the record's
+verdicts and their reasons, the per-sentence relations and goes-further labels, or the record's
 rule-id summary: see [what the seal covers](#the-seal-and-its-limits).
 
 Python 3.10+, standard library only. MIT licensed.
@@ -67,12 +67,12 @@ Claim verdicts: `supported`, `partial`, `unsupported`, `unresolved` (pass 1 foun
 `unchecked` (no usable verdict). The brief's overall status is one of `ok`, `unsupported`,
 `unresolved`, `partly-checked` (some claims checked, some not), `verifier-error`.
 
-## Relations and the through line
+## Relations and the goes-further check
 
-| relation | meaning | through line | what a reader-facing page prints for that sentence |
+| relation | meaning | goes further? | what a reader-facing page prints for that sentence |
 |---|---|---|---|
-| `says` | the source itself states it | states | no line state of its own: the sentence carries its claim's verdict; "supported" at line level only if a separate sentence-level check said so |
-| `implies` `suggests` `connotes` `follows` `explains` `posits` `illustrates` | the writing takes a step beyond the source; the verb names the step | step-beyond | "our reading" (only when that citation resolved; otherwise the sentence is left out) |
+| `says` | the source itself states it | says it | no line state of its own: the sentence carries its claim's verdict; "supported" at line level only if a separate sentence-level check said so |
+| `implies` `suggests` `connotes` `follows` `explains` `posits` `illustrates` | the writing takes a step beyond the source; the verb names the step | goes further | "our reading" (only when that citation resolved; otherwise the sentence is left out) |
 | `contradicts` | the source disagrees | contradicts | left out, never printed; on the claim sentence itself the whole item is omitted |
 | `undetermined` | the judge did not rate it | unrated | no line state of its own |
 | any other word from the judge | can't tell | unrated | "can't tell" at line level; never the claim's verdict, never supported |
@@ -109,7 +109,7 @@ an unknown word is not evidence of disagreement.
 
 The claim guard, the evidence pass, the per-sentence intake and the page views all use this
 reader, so they cannot disagree. A relation word handed straight to `line_states()`,
-`through_line()` or `line_rule()` in a hand-built brief that is neither a vocabulary word nor a
+`goes_further()` or `line_rule()` in a hand-built brief that is neither a vocabulary word nor a
 synonym is refused with `UnknownRelation`, because nothing says where it came from.
 
 ### Contradicts wins
@@ -204,7 +204,7 @@ a defaulted verb as the judge's own all break the chain, and `verify_seal()` ret
 
 **What it does not cover:** everything else in a `judge()` result. That includes the claim
 verdicts and their `why` in `result["brief"]`, the per-sentence spans with their relations and
-through-line labels, the line states a page derives from them, the attribution-overclaim results
+goes-further labels, the line states a page derives from them, the attribution-overclaim results
 (`result["attribution"]`), the run record in `result["verification"]`, and the record's own
 `verification.rule_ids` and `capture_time_result`. Changing any of those leaves `verify_seal()`
 True. Keep the whole result under version history if you need those fields witnessed too.
@@ -228,7 +228,7 @@ Nothing to install for the library, tests or demo: run from the repository root.
 ## API
 
 ```python
-from claim_seal import resolve, judge, seal, verify_seal, through_line, line_states
+from claim_seal import resolve, judge, seal, verify_seal, goes_further, line_states
 from claim_seal.adapters import ReplayJudge, OpenAICompatible
 
 report = resolve(brief, sources)                  # pass 1 only, no model
@@ -237,7 +237,7 @@ result["status"]                                  # ok / unsupported / unresolve
 result["brief"]                                   # annotated copy: every claim has "verification"
 result["claim_evidence"]                          # the sealed record
 verify_seal(result["claim_evidence"])             # True
-through_line("suggests")                          # "step-beyond"
+goes_further("suggests")                          # "goes further"
 line_states(result["brief"])                      # what a page may print, line by line
 ```
 
@@ -328,3 +328,18 @@ check is new; `judge()` returns an annotated copy
 instead of editing its input; source digests are taken when sources are handed in rather than
 by an HTTP fetcher. The composer's title-lineage checks for specific feed formats, its service
 checkpoints and its per-call usage telemetry are not included.
+
+## Related work
+
+**Mole** ([github.com/Arkaniad/mole](https://github.com/Arkaniad/mole), Apache-2.0) is a
+deep-research agent. It discards any quote it cannot find verbatim in the page it came from, and
+it rechecks its claims against their sources. claim-seal is not a research agent: it checks text
+that any tool or person wrote, marks each sentence as saying what its source says, going further
+or contradicting it, and seals the evidence rows behind each verdict.
+
+**SemanticCite** (Haan, [arXiv 2511.16198](https://arxiv.org/abs/2511.16198)) checks each
+citation against the full text of the cited work and sorts it into four classes: Supported,
+Partially Supported, Unsupported and Uncertain. It publishes tuned small open-source models and a
+labelled set of over 1,000 citations. claim-seal's claim verdicts are similar in kind; it adds
+the sentence-level goes-further marking and the sealed evidence rows, and it brings no model or
+labelled set of its own.

@@ -1,4 +1,5 @@
-"""The relation vocabulary, and how each word draws (or refuses) a "through line".
+"""The relation vocabulary, and the goes-further check: does the writing say what the source says,
+go further than it, or contradict it?
 
 A relation names how one sentence, or one claim, stands to one source:
 
@@ -15,7 +16,7 @@ Three views of the same closed vocabulary live here, so they cannot drift apart:
 
   derive_coarse_relation(verb)  the coarse axis carried in the sealed record
                                 (stated / inferred / contradicted / undetermined)
-  through_line(verb)            states / step-beyond / contradicts / unrated
+  goes_further(verb)            says it / goes further / contradicts / unrated
   line_rule(verb)               what a reader-facing page may print for a line holding that verb:
                                 None (no line-level state of its own), "reading" (printed as
                                 "our reading"), or "left-out" (never printed)
@@ -38,10 +39,10 @@ _COARSE_RELATION_BY_VERB = {
     **{verb: "inferred" for verb in STEP_BEYOND},
 }
 
-THROUGH_LINE = {
-    "says": "states",
+GOES_FURTHER = {
+    "says": "says it",
     "undetermined": "unrated",
-    **{verb: "step-beyond" for verb in STEP_BEYOND},
+    **{verb: "goes further" for verb in STEP_BEYOND},
     "contradicts": "contradicts",
 }
 
@@ -127,9 +128,9 @@ def derive_coarse_relation(relation: object) -> str:
     return _COARSE_RELATION_BY_VERB.get(str(relation or "").lower(), "undetermined")
 
 
-def through_line(verb: object) -> str:
-    """states / step-beyond / contradicts / unrated. Unknown words raise UnknownRelation."""
-    return THROUGH_LINE[_closed(verb)]
+def goes_further(verb: object) -> str:
+    """says it / goes further / contradicts / unrated. Unknown words raise UnknownRelation."""
+    return GOES_FURTHER[_closed(verb)]
 
 
 def line_rule(verb: object) -> str | None:
@@ -246,6 +247,6 @@ def line_states(brief: dict, second_checks: dict | None = None, labels: dict | N
             lines_out.append({"item": index + 1, "field": span_field, "text": text,
                               "state": state, "label": LABEL[state], "state_scope": scope,
                               "relation": relation,
-                              "through_line": THROUGH_LINE.get(relation) if relation else None,
+                              "goes_further": GOES_FURTHER.get(relation) if relation else None,
                               "source": source, "attribution": attribution})
     return {"lines": lines_out, "omitted": omitted, "left_out": left_out}

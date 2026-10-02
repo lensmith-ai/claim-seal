@@ -1,7 +1,7 @@
 """claim-seal: check each claim in a piece of writing against the sources it cites, record where
 the writing takes a step beyond its sources, and seal the result in a SHA-256 digest chain.
 
-    from claim_seal import resolve, judge, seal, verify_seal, through_line
+    from claim_seal import resolve, judge, seal, verify_seal, goes_further
     from claim_seal.adapters import ReplayJudge, OpenAICompatible
 
 Pass 1, resolve(), is pure code: does every cited reference exist in the sources?
@@ -14,8 +14,8 @@ a model and can be wrong, and the seal is an unkeyed digest chain, not a signatu
 """
 from .evidence import build_claim_evidence, capture_sources, digests_for, source_lineage
 from .support import ModelText, extract_json, judge, overall_status, verify
-from .relations import (LINE_RULE, SPAN_RELATIONS, STEP_BEYOND, THROUGH_LINE, UnknownRelation,
-                        derive_coarse_relation, line_rule, line_states, through_line)
+from .relations import (GOES_FURTHER, LINE_RULE, SPAN_RELATIONS, STEP_BEYOND, UnknownRelation,
+                        derive_coarse_relation, goes_further, line_rule, line_states)
 from .resolve import SourceError, resolve, resolve_only
 from .seal import seal, seal_problem, verify_seal
 
@@ -25,7 +25,7 @@ __all__ = [
     "resolve", "resolve_only", "judge", "verify", "overall_status",
     "seal", "verify_seal", "seal_problem", "build_claim_evidence", "capture_sources",
     "digests_for", "source_lineage",
-    "SPAN_RELATIONS", "STEP_BEYOND", "THROUGH_LINE", "LINE_RULE", "UnknownRelation",
-    "derive_coarse_relation", "through_line", "line_rule", "line_states",
+    "SPAN_RELATIONS", "STEP_BEYOND", "GOES_FURTHER", "LINE_RULE", "UnknownRelation",
+    "derive_coarse_relation", "goes_further", "line_rule", "line_states",
     "ModelText", "extract_json", "SourceError", "__version__",
 ]
