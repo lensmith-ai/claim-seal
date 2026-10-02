@@ -52,9 +52,9 @@ what a reader-facing page may print:
   item 1 [why_it_matters] supported (card): The extension is funded for one year, so a review of visitor numbers decides whether it lasts.
   item 1 [detail[0]] supported (card): Evening visits were already the busiest part of the day.
   item 2 [insight] partly supported (card): Longer hours are likely to lift library visits further.
-  item 2 [why_it_matters] our reading (line): If the reading room was already full in the evening, the extra hours meet demand rather than create it.
+  item 2 [why_it_matters] goes further (line): If the reading room was already full in the evening, the extra hours meet demand rather than create it.
   item 5 [insight] partly supported (card): Evening opening is expected to make the library the busiest public building in Millbrook.
-  item 5 [detail[0]] our reading (line): The library report says the extra evening hours will make it the busiest building in town.
+  item 5 [detail[0]] goes further (line): The library report says the extra evening hours will make it the busiest building in town.
       attribution: possible overclaim: the writing says the source states it ("says"), but the source only implies it, as the judge read it; treat a flag as a prompt to reread the sentence, not as a finding
   item 3 omitted: verdict-not-printable
   item 4 omitted: verdict-not-printable

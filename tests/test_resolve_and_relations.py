@@ -213,12 +213,12 @@ class LineStateTests(unittest.TestCase):
         doc = judged("partial", [("detail[0]", "six weeks", "undetermined", "exact")])
         self.assertEqual(self.states(doc)["detail[0]"], ("partly_supported", "card"))
 
-    def test_each_step_beyond_verb_is_our_reading(self):
+    def test_each_step_beyond_verb_is_printed_goes_further(self):
         for verb in ("implies", "suggests", "connotes", "follows", "explains", "posits", "illustrates"):
             out = line_states(judged("supported", [("why_it_matters", "carries", verb, "exact")]))
             line = next(l for l in out["lines"] if l["field"] == "why_it_matters")
             self.assertEqual((line["state"], line["label"], line["goes_further"]),
-                             ("reading", "our reading", "goes further"), verb)
+                             ("reading", "goes further", "goes further"), verb)
 
     def test_a_reading_needs_a_resolved_citation(self):
         out = line_states(judged("supported", [("why_it_matters", "carries", "implies", "unresolved")]))

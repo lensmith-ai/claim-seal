@@ -72,7 +72,7 @@ Claim verdicts: `supported`, `partial`, `unsupported`, `unresolved` (pass 1 foun
 | relation | meaning | goes further? | what a reader-facing page prints for that sentence |
 |---|---|---|---|
 | `says` | the source itself states it | says it | no line state of its own: the sentence carries its claim's verdict; "supported" at line level only if a separate sentence-level check said so |
-| `implies` `suggests` `connotes` `follows` `explains` `posits` `illustrates` | the writing takes a step beyond the source; the verb names the step | goes further | "our reading" (only when that citation resolved; otherwise the sentence is left out) |
+| `implies` `suggests` `connotes` `follows` `explains` `posits` `illustrates` | the writing takes a step beyond the source; the verb names the step | goes further | "goes further" (only when that citation resolved; otherwise the sentence is left out) |
 | `contradicts` | the source disagrees | contradicts | left out, never printed; on the claim sentence itself the whole item is omitted |
 | `undetermined` | the judge did not rate it | unrated | no line state of its own |
 | any other word from the judge | can't tell | unrated | "can't tell" at line level; never the claim's verdict, never supported |

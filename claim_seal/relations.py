@@ -19,7 +19,7 @@ Three views of the same closed vocabulary live here, so they cannot drift apart:
   goes_further(verb)            says it / goes further / contradicts / unrated
   line_rule(verb)               what a reader-facing page may print for a line holding that verb:
                                 None (no line-level state of its own), "reading" (printed as
-                                "our reading"), or "left-out" (never printed)
+                                "goes further"), or "left-out" (never printed)
 
 Reading a judge's word: read_relation() trims and lower-cases it, reads the synonyms in
 RELATION_SYNONYMS as the verb they name, and reads ANY OTHER word as "undetermined", marked
@@ -51,7 +51,8 @@ GOES_FURTHER = {
 #   says          no line state of its own: the line carries its claim's verdict, and is printed
 #                 "supported" at line level only when a second, sentence-level check said so
 #   undetermined  no line state of its own: the judge did not rate the sentence
-#   step-beyond   "reading": printed as "our reading", a step the writing takes beyond the source
+#   implies, suggests, ... (every verb in STEP_BEYOND)
+#                 "reading": printed as "goes further", a step the writing takes beyond the source
 #   contradicts   "left-out": the source disagrees, so the line is never printed
 LINE_RULE = {
     "says": None,
@@ -62,7 +63,7 @@ LINE_RULE = {
 
 PRINTED_VERDICTS = {"supported": "supported", "partial": "partly_supported"}
 LABEL = {"supported": "supported", "partly_supported": "partly supported",
-         "reading": "our reading", "cant_tell": "can't tell"}
+         "reading": "goes further", "cant_tell": "can't tell"}
 
 
 # Synonyms the reader accepts and the verb each is read as. THE ONE LIST: the claim-level guard,
@@ -175,8 +176,8 @@ def line_states(brief: dict, second_checks: dict | None = None, labels: dict | N
     - an item is printed only when its claim verdict is supported or partial;
     - a line whose span relation is contradicts is left out; on the claim line itself the whole
       item is omitted;
-    - a line whose span relation is a step beyond the source is "our reading", but only when that
-      citation resolved; otherwise the line is left out;
+    - a line whose span relation is a step beyond the source is printed "goes further", but only
+      when that citation resolved; otherwise the line is left out;
     - a line whose span carries a word the judge used that the reader did not know
       (sentence_relation_read: "unknown") is "can't tell" at line scope: it never takes the
       claim's verdict and never prints as supported;
