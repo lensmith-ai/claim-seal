@@ -26,7 +26,7 @@ import hashlib
 
 from .normalize import COORDINATE_SYSTEM, NORMALIZER_ID, normalize, normalizer_sha256
 from .relations import derive_coarse_relation, read_relation
-from .resolve import citation_key, claim_units, load_sources
+from .resolve import citation_key, claim_units, load_sources, shape_brief
 from .seal import CLAIM_EVIDENCE_CONTRACT, canonical, seal
 
 _EVIDENCE_VALUES = frozenset({"present", "not-located", "no-text"})
@@ -191,6 +191,7 @@ def evidence_candidates(brief: dict, sources: dict, *, enabled: bool = True) -> 
     """{(claim n, citation index): window text} for the judge. Transient: never serialized."""
     if not enabled:
         return {}
+    brief = shape_brief(brief)
     sources = load_sources(sources)
     candidates: dict[tuple[int, int], str] = {}
     bindings: dict[tuple[int, int], dict] = {}
@@ -307,6 +308,7 @@ def build_claim_evidence(brief: dict, sources: dict, model_verdicts: dict | None
     `model_verdicts` maps claim number (claim_units order) to the judge's parsed entry. Sources
     must carry capture digests (see capture_sources); missing or drifted digests are refused.
     """
+    brief = shape_brief(brief)
     sources = load_sources(sources)
     outcomes: list[dict] = []
 

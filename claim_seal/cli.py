@@ -19,7 +19,7 @@ from .adapters import AdapterError, OpenAICompatible, ReplayJudge
 from .support import judge
 from .relations import GOES_FURTHER, UnknownRelation, line_states
 from .attribution import check_span
-from .resolve import SourceError, load_sources, resolve_only
+from .resolve import BriefError, SourceError, load_sources, resolve_only
 from .seal import seal_problem
 
 
@@ -160,7 +160,7 @@ def cmd_check(args) -> int:
                            pool_size=args.pool, claim_deadline_s=args.deadline)
             _print_report(result, sys.stdout,
                           {sid: e["label"] for sid, e in load_sources(sources).items()})
-    except (SourceError, AdapterError) as exc:
+    except (BriefError, SourceError, AdapterError) as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 2
     if args.out:

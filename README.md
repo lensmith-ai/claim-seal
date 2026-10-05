@@ -255,6 +255,13 @@ Also: `resolve_only()` (pass 1 for writing that exaggerates on purpose: verdicts
 
 **Inputs.** A brief: `{"items": [{"insight": "...", "why_it_matters": "...", "detail": ["..."],
 "sources": [{"id": "source-id", "ref": "cited title"}], "analysis": [...]}], "connection": {...}}`.
+A lone value where a list is expected is read as a one-element list, never split: a string
+`detail` is one detail sentence (`"detail": "..."` reads as `["..."]`, so its span field is
+`detail[0]`), and a single object in `items`, `sources` or `analysis` is a list of one. Every
+entry point applies this rule (`shape_brief()`); `judge()` returns the brief in that list shape.
+Shapes with no safe reading raise `BriefError` naming the field: a `detail` that is an object or
+a number, `items`/`sources`/`analysis` that are a string or a number (a string `analysis` has no
+sources, so it would be dropped unseen), and an item or citation that is not an object.
 Sources: `{"source-id": {"label": "...", "items": [{"title": "...", "text": "...", "url": "...",
 "body": "...", "retrieved_at": "..."}]}}`. A citation names an item by title; pass 2 reads title
 and text (first 700 characters); `body` is the full captured document evidence is quoted from

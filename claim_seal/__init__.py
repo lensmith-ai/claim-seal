@@ -16,7 +16,7 @@ from .evidence import build_claim_evidence, capture_sources, digests_for, source
 from .support import ModelText, extract_json, judge, overall_status, verify
 from .relations import (GOES_FURTHER, LINE_RULE, SPAN_RELATIONS, STEP_BEYOND, UnknownRelation,
                         derive_coarse_relation, goes_further, line_rule, line_states)
-from .resolve import SourceError, resolve, resolve_only
+from .resolve import BriefError, SourceError, resolve, resolve_only, shape_brief
 from .seal import seal, seal_problem, verify_seal
 
 __version__ = "0.1.0"
@@ -27,5 +27,5 @@ __all__ = [
     "digests_for", "source_lineage",
     "SPAN_RELATIONS", "STEP_BEYOND", "GOES_FURTHER", "LINE_RULE", "UnknownRelation",
     "derive_coarse_relation", "goes_further", "line_rule", "line_states",
-    "ModelText", "extract_json", "SourceError", "__version__",
+    "ModelText", "extract_json", "SourceError", "BriefError", "shape_brief", "__version__",
 ]

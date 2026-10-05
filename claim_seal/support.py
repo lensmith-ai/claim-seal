@@ -29,7 +29,8 @@ from .completion import complete_partials
 from .evidence import build_claim_evidence, capture_sources, evidence_candidates, source_lineage
 from .prompts import build_claim_prompt, build_prompt
 from .relations import SPAN_RELATIONS, read_relation
-from .resolve import CITATION_ROW_FIELDS, TEXT_FIELDS, load_sources, resolve, target_for_claim
+from .resolve import (CITATION_ROW_FIELDS, TEXT_FIELDS, load_sources, resolve, shape_brief,
+                      target_for_claim)
 from .spans import SPAN_CONTRACT, span_fields, span_receipt
 
 # Per-claim deadline and pool size. The deadline is ABSOLUTE from submission: queue wait and any
@@ -246,12 +247,14 @@ def verify(brief: dict, sources: dict, receipts: dict, model, *,
            pool_size: int = VERIFY_POOL_DEFAULT,
            claim_deadline_s: float = VERIFY_CLAIM_DEADLINE_S,
            text_fields: tuple = TEXT_FIELDS) -> dict:
-    """Run both passes. MUTATES `brief`: every claim gains a `verification` block, and the record
+    """Run both passes. MUTATES `brief`: shape_brief fixes it in place (a string detail becomes
+    [detail]), every claim gains a `verification` block, and the record
     is written to receipts["verification"] and returned. Most callers want judge() instead.
 
     A model exception on the whole-brief path propagates (the caller owns that failure); on the
     per-claim path it is classified per claim.
     """
+    shape_brief(brief, in_place=True)
     labels = {sid: entry["label"] for sid, entry in load_sources(sources).items()}
     report = resolve(brief, sources, text_fields=text_fields)
     span_fields_by_claim = ({n: span_fields(brief, c) for n, c in enumerate(report["claims"])}
@@ -470,7 +473,7 @@ def judge(brief: dict, sources: dict, model, *, spans: bool = True, sharded: boo
 
     The input brief and sources are not modified. Returns:
       {"status":         overall_status(...),
-       "brief":          an annotated copy: every claim gains "verification" with its verdict,
+       "brief":          an annotated copy, in the shape of shape_brief: every claim gains "verification" with its verdict,
                          why, and citation rows (resolution, url, span with sentence_relation),
        "verification":   the run record (counts, model, timings, span receipt, shards),
        "claim_evidence": the sealed claim-evidence record (when evidence=True),
@@ -482,7 +485,7 @@ def judge(brief: dict, sources: dict, model, *, spans: bool = True, sharded: boo
     model call, local span placement on, the locating-quote wording off, the evidence pass on,
     completion off.
     """
-    doc = copy.deepcopy(brief)
+    doc = shape_brief(copy.deepcopy(brief), in_place=True)
     captured = capture_sources(sources)
     receipts: dict = {}
     candidates = evidence_candidates(doc, captured) if evidence else None

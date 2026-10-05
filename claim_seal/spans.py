@@ -15,7 +15,7 @@ import re
 import unicodedata
 
 from .relations import read_relation
-from .resolve import target_for_claim
+from .resolve import detail_list, shape_brief, target_for_claim
 
 SPAN_CONTRACT = "citation-span/v1"
 
@@ -136,6 +136,7 @@ def span_fields(brief: dict, claim: dict) -> dict:
     sentence was separately verified.
     """
     fields = {"insight": claim.get("claim") or ""}
+    brief = shape_brief(brief)
     items = brief.get("items") or []
     obj = None
     if claim.get("kind") == "item" and isinstance(claim.get("index"), int):
@@ -147,7 +148,7 @@ def span_fields(brief: dict, claim: dict) -> dict:
     why = obj.get("why_it_matters")
     if isinstance(why, str) and why.strip():
         fields["why_it_matters"] = why
-    for d_i, d in enumerate(obj.get("detail") or []):
+    for d_i, d in enumerate(detail_list(obj.get("detail"))):
         if isinstance(d, str) and d.strip():
             fields["detail[%d]" % d_i] = d
     return fields

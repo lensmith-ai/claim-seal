@@ -43,6 +43,7 @@ from __future__ import annotations
 import re
 
 from .relations import GOES_FURTHER, read_relation
+from .resolve import detail_list, shape_brief
 
 STRONG = ("says", "said", "states", "stated", "reports", "reported", "describes", "described",
           "writes", "wrote", "notes", "noted", "announces", "announced", "confirms", "confirmed",
@@ -165,7 +166,7 @@ def check_span(item: dict, citation: dict, labels: dict | None = None) -> dict |
     elif field == "why_it_matters":
         text = item.get("why_it_matters") or ""
     elif isinstance(field, str) and field.startswith("detail["):
-        details = item.get("detail") or []
+        details = detail_list(item.get("detail"))
         k = int(field[7:-1])
         text = details[k] if 0 <= k < len(details) else ""
     else:
@@ -186,6 +187,7 @@ def check_span(item: dict, citation: dict, labels: dict | None = None) -> dict |
 def attribution_checks(brief: dict, labels: dict | None = None) -> list[dict]:
     """One result per spanned citation of every item in an annotated brief. Not sealed."""
     out = []
+    brief = shape_brief(brief)
     for index, item in enumerate(brief.get("items") or []):
         for c_index, citation in enumerate(((item.get("verification") or {}).get("citations")) or []):
             result = check_span(item, citation, labels)

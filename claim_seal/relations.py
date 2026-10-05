@@ -29,6 +29,8 @@ instead of guessing, because nothing says where it came from.
 """
 from __future__ import annotations
 
+from .resolve import detail_list, shape_brief
+
 SPAN_RELATIONS = frozenset({"says", "implies", "suggests", "connotes", "follows", "explains",
                             "posits", "illustrates", "contradicts", "undetermined"})
 STEP_BEYOND = frozenset({"implies", "suggests", "connotes", "follows", "explains", "posits",
@@ -152,7 +154,7 @@ def item_lines(item: dict) -> list:
     lines = [("insight", "insight", item.get("insight") or item.get("text") or item.get("headline"))]
     if item.get("why_it_matters"):
         lines.append(("why_it_matters", "why_it_matters", item["why_it_matters"]))
-    for k, detail in enumerate(item.get("detail") or []):
+    for k, detail in enumerate(detail_list(item.get("detail"))):
         if isinstance(detail, str) and detail.strip():
             lines.append(("detail", "detail[{}]".format(k), detail))
     return lines
@@ -190,6 +192,7 @@ def line_states(brief: dict, second_checks: dict | None = None, labels: dict | N
     raises UnknownRelation.
     """
     from .attribution import check_span  # local: attribution imports this module
+    brief = shape_brief(brief)
     second_checks = second_checks or {}
     lines_out, omitted, left_out = [], [], []
     for index, item in enumerate(brief.get("items") or []):
