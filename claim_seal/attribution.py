@@ -156,7 +156,12 @@ def _names(citation: dict, labels: dict | None) -> list:
 
 
 def check_span(item: dict, citation: dict, labels: dict | None = None) -> dict | None:
-    """The attribution result for one citation's span, or None when it has no span."""
+    """The attribution result for one citation's span, or None when it has no span.
+
+    Never raises on a hand-built item: a span on a line it cannot read (a detail of 0 or {},
+    a non-string line, a malformed "detail[k]") gives None, the same as no span. Briefs that
+    come through shape_brief never reach those cases; this heuristic must not stop a page.
+    """
     span = citation.get("span") if isinstance(citation, dict) else None
     if not isinstance(span, dict):
         return None
@@ -166,8 +171,11 @@ def check_span(item: dict, citation: dict, labels: dict | None = None) -> dict |
     elif field == "why_it_matters":
         text = item.get("why_it_matters") or ""
     elif isinstance(field, str) and field.startswith("detail["):
-        details = detail_list(item.get("detail"))
-        k = int(field[7:-1])
+        try:
+            details = detail_list(item.get("detail"))
+            k = int(field[7:-1])
+        except ValueError:  # BriefError is a ValueError: an unreadable detail is no span
+            return None
         text = details[k] if 0 <= k < len(details) else ""
     else:
         return None

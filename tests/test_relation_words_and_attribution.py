@@ -258,13 +258,18 @@ class Round6AttributionFixes(unittest.TestCase):
         self.assertTrue(judge_attribution("argued", "hedged", "says")["message"].startswith("understated"))
 
     def test_line_states_never_crashes_on_non_string_text(self):
-        for insight in (5, {"t": "x"}, None, ["a"]):
-            brief = {"items": [{"insight": insight, "verification": {"verdict": "supported", "citations": [
+        def brief(insight):
+            return {"items": [{"insight": insight, "verification": {"verdict": "supported", "citations": [
                 {"source": "s", "resolution": "exact",
                  "span": {"field": "insight", "start": 0, "sentence_relation": "says"}}]}}]}
-            out = line_states(brief)
+        for insight in (5, {"t": "x"}, ["a"]):
+            out = line_states(brief(insight))
             self.assertEqual([l["state"] for l in out["lines"]], ["supported"], repr(insight))
             self.assertEqual([r["flag"] for r in out["lines"][0]["attribution"] if r["flag"]], [], repr(insight))
+        # A claim with no text at all is refused, naming it, rather than printed as a "supported"
+        # line with nothing in it (claim_seal.resolve.shape_brief).
+        with self.assertRaisesRegex(ValueError, r'^items\[0\] must have claim text'):
+            line_states(brief(None))
 
     def test_check_span_itself_returns_nothing_for_non_string_text(self):
         from claim_seal.attribution import check_span

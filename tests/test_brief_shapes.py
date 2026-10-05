@@ -236,6 +236,18 @@ class EveryShapeCallIsPinnedTests(unittest.TestCase):
         self.assertEqual(check_span(item, citation)["sentence"],
                          "Fares stay the same as on the daytime boats.")
 
+    def test_check_span_never_raises_on_a_hand_built_item_it_cannot_read(self):
+        span = {"field": "detail[0]", "start": 0, "end": 4, "quote": "Fare",
+                "sentence_relation": "says"}
+        for detail in (0, {}, False, {"a": "Fares stay the same."}, 3):
+            with self.subTest(detail=detail):
+                self.assertIsNone(check_span({"insight": INSIGHT, "detail": detail},
+                                             {"source": "harbour", "span": span}))
+        for field in ("detail[x]", "detail["):
+            with self.subTest(field=field):
+                self.assertIsNone(check_span({"insight": INSIGHT, "detail": [DETAIL]},
+                                             {"source": "harbour", "span": dict(span, field=field)}))
+
     def test_item_lines_called_directly_reads_a_string_detail_as_one_line(self):
         self.assertEqual(item_lines({"insight": INSIGHT, "detail": DETAIL}),
                          [("insight", "insight", INSIGHT), ("detail", "detail[0]", DETAIL)])
@@ -276,6 +288,21 @@ class UnreadableShapesAreRefusedTests(unittest.TestCase):
             "connection.detail"),
         "sources as 0": (brief(sources=0), "items[0].sources"),
         "sources as an empty string": (brief(sources=""), "items[0].sources"),
+        # An empty object is never wrapped into an invented claim or citation: a claim needs
+        # text and a citation needs a source id, so {} and [{}] are refused alike.
+        "sources as an empty object": (brief(sources={}), "items[0].sources[0]"),
+        "sources as [{}]": (brief(sources=[{}]), "items[0].sources[0]"),
+        "a citation missing its id": (brief(sources=[{"ref": TITLE}]), "items[0].sources[0]"),
+        "a lone citation missing its id": (brief(sources={"ref": TITLE}), "items[0].sources[0]"),
+        "analysis as an empty object": (brief(analysis={}), "items[0].analysis[0]"),
+        "analysis as [{}]": (brief(analysis=[{}]), "items[0].analysis[0]"),
+        "a statement with sources but no text": (brief(analysis=[{"sources": [dict(CITE)]}]),
+                                                 "items[0].analysis[0]"),
+        "items as an empty object": ({"items": {}}, "items[0]"),
+        "items as [{}]": ({"items": [{}]}, "items[0]"),
+        "an item with sources but no text": ({"items": [{"sources": [dict(CITE)]}]}, "items[0]"),
+        "connection as an empty object": ({"items": brief()["items"], "connection": {}},
+                                          "connection"),
     }
 
     def test_every_entry_point_refuses_with_the_field_named(self):
@@ -295,7 +322,8 @@ class UnreadableShapesAreRefusedTests(unittest.TestCase):
                 with self.subTest(shape=name, entry=entry):
                     with self.assertRaises(resolve_mod.BriefError) as caught:
                         call(copy.deepcopy(doc))
-                    self.assertIn(where + " must be", str(caught.exception))
+                    self.assertTrue(str(caught.exception).startswith(where + " must "),
+                                    str(caught.exception))
 
     def test_none_and_an_empty_list_are_still_no_value(self):
         plain = resolve(brief([]), SOURCES)
@@ -312,6 +340,13 @@ class UnreadableShapesAreRefusedTests(unittest.TestCase):
             with self.subTest(sources=empty):
                 self.assertIs(resolve_mod.shape_brief(doc), doc)
                 self.assertEqual(resolve(doc, SOURCES)["totals"]["citations"], 0)
+
+    def test_a_citation_with_an_id_but_no_ref_is_kept_and_reported_unresolved(self):
+        # The boundary of the rule: real content is never refused or dropped for being thin. A
+        # citation that names its source but no title is the writer's, and pass 1 shows it.
+        report = resolve(brief(sources=[{"id": "harbour"}]), SOURCES)
+        self.assertEqual(report["totals"], {"citations": 1, "exact": 0, "fuzzy": 0,
+                                            "unresolved": 1})
 
     def test_the_cli_refuses_an_unreadable_brief_with_exit_2(self):
         with tempfile.TemporaryDirectory() as tmp:

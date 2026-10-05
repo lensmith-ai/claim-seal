@@ -17,7 +17,8 @@ INPUTS
            citation) or "analysis" (a statement), or in "items", is a one-element list. Missing,
            None and [] are no value. Shapes that cannot be read without inventing or losing
            content raise BriefError: e.g. a detail of 0, False or {}, a string analysis
-           statement (alone or in a list), a connection that is a list (even of one) or a string.
+           statement (alone or in a list), a connection that is a list (even of one) or a string,
+           a claim with no text and a citation with no "id" (so {} and [{}] are refused alike).
   sources  {source id: {"label"?: str, "items": [{"title": str, "text": str, "url"?: str,
                                                  "body"?: str, "retrieved_at"?: str,
                                                  "id"?: str}]}}
@@ -86,12 +87,22 @@ def _object_list(value, where: str, what: str):
 
 
 def _shape_claim(obj: dict, where: str, apply: bool) -> bool:
-    """Check (and with apply, fix) one claim object's sources. True when a fix is needed."""
+    """Check (and with apply, fix) one claim object and its sources. True when a fix is needed.
+
+    A claim with no text, and a citation with no source id, are refused rather than read: the
+    first would be checked as an empty claim and the second as a citation of nothing, so either
+    would put a verdict (and a sealed row) on content nobody wrote. This is what keeps a lone {}
+    from becoming [{}], an invented claim or citation, and it treats [{}] the same way.
+    """
+    if not (obj.get("text") or obj.get("insight") or obj.get("headline")):
+        raise BriefError(f'{where} must have claim text in "text", "insight" or "headline"')
     sources, changed = _object_list(obj.get("sources"), f"{where}.sources", "citation")
     for n, cite in enumerate(sources or []):
         if not isinstance(cite, dict):
             raise BriefError(f"{where}.sources[{n}] must be a citation object "
                              f'{{"id": ..., "ref": ...}}, not {_kind(cite)}')
+        if not cite.get("id"):
+            raise BriefError(f'{where}.sources[{n}] must name its source with "id"')
     if changed and apply:
         obj["sources"] = sources
     return changed
@@ -157,7 +168,9 @@ def shape_brief(brief: dict, *, in_place: bool = False) -> dict:
     analysis that are a string, a number or a boolean; an item, a citation or an analysis
     statement that is not an object (a string statement has no sources, so it would be dropped
     unseen, whether alone or inside a list); a connection that is not one object (a non-empty
-    list, even of one, or a string).
+    list, even of one, or a string); an item, statement or connection with no claim text, and a
+    citation with no source "id" (either would be checked, and sealed, as content nobody wrote;
+    this is why a lone {} is refused rather than read as [{}], and [{}] the same way).
 
     By default the caller's brief is never modified: a well-shaped brief comes back as the same
     object, and one that needs a fix comes back as a fixed copy. in_place=True fixes the brief

@@ -265,7 +265,11 @@ dropped without being seen. That covers a `detail` that is an object, a number o
 (`0`, `false` and `{}` included) or a `detail` entry that is not a string; `items`/`sources`/
 `analysis` that are a string, a number or a boolean; an item, citation or analysis statement
 that is not an object (a string statement has no sources, so it would be dropped unseen, alone
-or inside a list); and a `connection` that is not one object. A non-empty `connection` list is
+or inside a list); a `connection` that is not one object; and, so that no claim or citation is
+invented, an item, statement or connection with no claim text (`text`, `insight` or
+`headline`) and a citation with no source `id`. So `{}` and `[{}]` in `items`, `sources` or
+`analysis` are refused alike rather than read as an empty claim or citation (a citation that
+names its source but no title is kept, and pass 1 reports it unresolved). A non-empty `connection` list is
 refused, a list of one included: the rule wraps a lone value into a list, never the reverse.
 Sources: `{"source-id": {"label": "...", "items": [{"title": "...", "text": "...", "url": "...",
 "body": "...", "retrieved_at": "..."}]}}`. A citation names an item by title; pass 2 reads title
