@@ -259,9 +259,14 @@ A lone value where a list is expected is read as a one-element list, never split
 `detail` is one detail sentence (`"detail": "..."` reads as `["..."]`, so its span field is
 `detail[0]`), and a single object in `items`, `sources` or `analysis` is a list of one. Every
 entry point applies this rule (`shape_brief()`); `judge()` returns the brief in that list shape.
-Shapes with no safe reading raise `BriefError` naming the field: a `detail` that is an object or
-a number, `items`/`sources`/`analysis` that are a string or a number (a string `analysis` has no
-sources, so it would be dropped unseen), and an item or citation that is not an object.
+Missing, `null` and `[]` mean no value (and `""` means no detail). Every other shape with no safe
+reading raises `BriefError` naming the field, for one reason: content would be invented, or
+dropped without being seen. That covers a `detail` that is an object, a number or a boolean
+(`0`, `false` and `{}` included) or a `detail` entry that is not a string; `items`/`sources`/
+`analysis` that are a string, a number or a boolean; an item, citation or analysis statement
+that is not an object (a string statement has no sources, so it would be dropped unseen, alone
+or inside a list); and a `connection` that is not one object. A non-empty `connection` list is
+refused, a list of one included: the rule wraps a lone value into a list, never the reverse.
 Sources: `{"source-id": {"label": "...", "items": [{"title": "...", "text": "...", "url": "...",
 "body": "...", "retrieved_at": "..."}]}}`. A citation names an item by title; pass 2 reads title
 and text (first 700 characters); `body` is the full captured document evidence is quoted from

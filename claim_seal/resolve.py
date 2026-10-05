@@ -14,8 +14,10 @@ INPUTS
            A claim's text is read from "text", then "insight", then "headline".
            One rule for a lone value where a list is expected (shape_brief): a string "detail"
            is ONE detail sentence, [detail], never split; a single object in "sources" (a
-           citation) or "analysis" (a statement), or in "items", is a one-element list. Shapes
-           that cannot be read that way without inventing or losing content raise BriefError.
+           citation) or "analysis" (a statement), or in "items", is a one-element list. Missing,
+           None and [] are no value. Shapes that cannot be read without inventing or losing
+           content raise BriefError: e.g. a detail of 0, False or {}, a string analysis
+           statement (alone or in a list), a connection that is a list (even of one) or a string.
   sources  {source id: {"label"?: str, "items": [{"title": str, "text": str, "url"?: str,
                                                  "body"?: str, "retrieved_at"?: str,
                                                  "id"?: str}]}}
@@ -53,21 +55,27 @@ def detail_list(detail, where: str = "detail") -> list:
     Iterating a string walks its characters, so without this a writer that put the detail
     paragraph in a string got one "line" per character. The rule is deliberately the plain one:
     splitting into sentences would put a sentence splitter's guesses into the span field names
-    ("detail[2]") that the checked record cites. An object or a number is refused: an object's
-    keys would be read as sentences and its values lost.
+    ("detail[2]") that the checked record cites. Missing, None, [] and "" are no detail.
+    Anything else that is not a list or a string is refused, including 0, False and {}: an
+    object's keys would be read as sentences and its values lost, and a number or boolean has no
+    sentence to read. (shape_brief also refuses a list entry that is not a string; this
+    per-item reader leaves such an entry for its caller to skip, so the attribution heuristic,
+    which must never raise, can still be called on a hand-built item.)
     """
-    if not detail:
-        return []
-    if isinstance(detail, str):
-        return [detail]
-    if isinstance(detail, list):
-        return detail
-    raise BriefError(f"{where} must be a list of strings or one string, not {_kind(detail)}")
+    if detail is None or isinstance(detail, str):
+        return [detail] if detail else []
+    if not isinstance(detail, list):
+        raise BriefError(f"{where} must be a list of strings or one string, not {_kind(detail)}")
+    return detail
 
 
 def _object_list(value, where: str, what: str):
-    """(list, changed) for a field that holds a list of objects. A lone object is [object]."""
-    if not value:
+    """(list, changed) for a field that holds a list of objects. A lone object is [object].
+
+    Missing, None and [] are empty. Any other value that is not a list or an object (a string,
+    a number, a boolean, including "", 0 and False) is refused.
+    """
+    if value is None:
         return value, False
     if isinstance(value, dict):
         return [value], True
@@ -89,6 +97,20 @@ def _shape_claim(obj: dict, where: str, apply: bool) -> bool:
     return changed
 
 
+def _shape_detail(obj: dict, where: str, apply: bool) -> bool:
+    """Check (and with apply, fix) one object's detail. True when a fix is needed."""
+    detail = obj.get("detail")
+    shaped = detail_list(detail, f"{where}.detail")
+    for k, sentence in enumerate(shaped):
+        if not isinstance(sentence, str):  # it would be skipped unseen
+            raise BriefError(f"{where}.detail[{k}] must be a string, not {_kind(sentence)}")
+    if detail and shaped is not detail:
+        if apply:
+            obj["detail"] = shaped
+        return True
+    return False
+
+
 def _shape(brief: dict, apply: bool) -> bool:
     changed = False
     items, fix = _object_list(brief.get("items"), "items", "item")
@@ -99,28 +121,26 @@ def _shape(brief: dict, apply: bool) -> bool:
         where = f"items[{i}]"
         if not isinstance(item, dict):
             raise BriefError(f"{where} must be an object, not {_kind(item)}")
-        detail = item.get("detail")
-        shaped = detail_list(detail, f"{where}.detail")
-        if detail and shaped is not detail:
-            changed = True
-            if apply:
-                item["detail"] = shaped
+        changed |= _shape_detail(item, where, apply)
         changed |= _shape_claim(item, where, apply)
         analysis, fix = _object_list(item.get("analysis"), f"{where}.analysis", "statement")
         if fix and apply:
             item["analysis"] = analysis
         changed |= fix
         for k, statement in enumerate(analysis or []):
-            if isinstance(statement, dict):  # a non-object statement has no sources: not a claim
-                changed |= _shape_claim(statement, f"{where}.analysis[{k}]", apply)
+            if not isinstance(statement, dict):  # it has no sources, so it would be dropped unseen
+                raise BriefError(f"{where}.analysis[{k}] must be a statement object "
+                                 f'{{"text": ..., "sources": [...]}}, not {_kind(statement)}')
+            changed |= _shape_claim(statement, f"{where}.analysis[{k}]", apply)
     conn = brief.get("connection")
+    if conn is not None and not isinstance(conn, dict) and conn != []:
+        # One connection per brief. A non-empty list is refused, a list of one included:
+        # the rule only ever wraps a lone value into a list, never unwraps one, and a list of
+        # two would have no reading at all. A string has no sources to check.
+        raise BriefError(f"connection must be one object {{\"text\": ..., \"sources\": [...]}}, "
+                         f"not {_kind(conn)}")
     if isinstance(conn, dict):
-        detail = conn.get("detail")
-        shaped = detail_list(detail, "connection.detail")
-        if detail and shaped is not detail:
-            changed = True
-            if apply:
-                conn["detail"] = shaped
+        changed |= _shape_detail(conn, "connection", apply)
         changed |= _shape_claim(conn, "connection", apply)
     return changed
 
@@ -128,11 +148,16 @@ def _shape(brief: dict, apply: bool) -> bool:
 def shape_brief(brief: dict, *, in_place: bool = False) -> dict:
     """The brief in the shape every pass reads, under one rule for a lone value where a list is
     expected: a string "detail" is [detail]; a single object in "items", "sources" or
-    "analysis" is [object]. Empty or missing fields are left as they are.
+    "analysis" is [object]. Missing, None and [] (and "" for a detail) are empty and left as
+    they are.
 
-    Refused with BriefError, because no reading of them is safe: a detail that is an object or a
-    number; items, sources or analysis that are a string or a number (a string analysis has no
-    sources, so it would be dropped unseen); an item or a citation that is not an object.
+    Refused with BriefError, because no reading of them is safe, under one reason: content that
+    would be invented, or dropped without being seen. A detail that is an object, a number or a
+    boolean (0, False and {} included), or a detail entry that is not a string; items, sources or
+    analysis that are a string, a number or a boolean; an item, a citation or an analysis
+    statement that is not an object (a string statement has no sources, so it would be dropped
+    unseen, whether alone or inside a list); a connection that is not one object (a non-empty
+    list, even of one, or a string).
 
     By default the caller's brief is never modified: a well-shaped brief comes back as the same
     object, and one that needs a fix comes back as a fixed copy. in_place=True fixes the brief
