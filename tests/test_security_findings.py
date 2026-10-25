@@ -641,5 +641,62 @@ class Finding7OutNeverClobbersOrFollowsSymlinks(unittest.TestCase):
         self.assertEqual(self._victim(), VICTIM_TEXT)
 
 
+class Finding8UnicodeSpanNormalizationIsTotal(unittest.TestCase):
+    """MEDIUM 8: a ligature expands under NFKC but the offset map kept one index for it, so a
+    forgiving span match could raise IndexError or return offsets that slice the wrong text."""
+
+    def test_the_review_probe_a_ligature_before_an_end_of_string_match(self):
+        from claim_seal.spans import find_forgiving
+        text = "The ﬁnal report is due."
+        got = find_forgiving(text, "final REPORT is due.")
+        self.assertIsNotNone(got)
+        self.assertEqual(text[got[0]:got[1]], "ﬁnal report is due.")
+
+    def test_offsets_after_an_expansion_slice_the_right_text(self):
+        from claim_seal.spans import find_forgiving
+        cases = [("Re: ﬁnal answer ready", "answer", "answer"),
+                 ("ﬃce hours ﬂow on", "hours flow", "hours ﬂow"),
+                 ("İstanbul office opens", "office opens", "office opens"),
+                 ("ＡＢＣ report  arrives", "abc report arrives", "ＡＢＣ report  arrives"),
+                 ("café opens late", "opens late", "opens late"),
+                 ("one ﬁ", "ﬁ", "ﬁ")]
+        for text, quote, expected in cases:
+            with self.subTest(text=text):
+                got = find_forgiving(text, quote)
+                self.assertIsNotNone(got)
+                self.assertEqual(text[got[0]:got[1]], expected)
+
+    def test_the_normalised_map_has_one_original_index_per_emitted_code_point(self):
+        from claim_seal.spans import _norm_with_map
+        for text in ("ﬁﬃİＡ x́  — ½", "plain"):
+            norm, idx = _norm_with_map(text)
+            self.assertEqual(len(norm), len(idx), text)
+            self.assertTrue(all(0 <= i < len(text) for i in idx))
+
+    def test_an_unexpected_normalisation_failure_is_a_named_drop_not_a_crash(self):
+        from claim_seal import spans
+
+        def boom(text, quote):
+            raise IndexError("planted")
+        with patch.object(spans, "find_forgiving", boom):
+            span, reason = spans.validate_span("Alpha works well.", {"resolution": "exact", "text": "t"},
+                                               {"citation_index": 0, "span_quote": "ALPHA works"})
+        self.assertIsNone(span)
+        self.assertEqual(reason, "span_normalization_failed")
+
+    def test_end_to_end_a_ligature_in_the_writing_does_not_abort_the_check(self):
+        brief = {"items": [{"insight": "The relay clears ten thousand messages an hour.",
+                            "detail": ["The ﬁnal ﬁgure is ten thousand an hour."],
+                            "sources": [{"id": "alpha", "ref": "Queue rewrite ships"}]}]}
+        model = _one_claim_judge(
+            evidence_spans=[{"citation_index": 0, "support_span": LOCATED}],
+            citation_spans=[{"citation_index": 0, "span_quote": "final figure is ten thousand an hour",
+                             "span_relation": "says"}])
+        result = judge(brief, copy.deepcopy(ONE_SOURCE), model, local_placement=False)
+        span = result["brief"]["items"][0]["verification"]["citations"][0]["span"]
+        self.assertEqual(span["quote"], "ﬁnal ﬁgure is ten thousand an hour")
+        self.assertEqual(span["producer"], "model-quote-normalized-v1")
+
+
 if __name__ == "__main__":
     unittest.main()

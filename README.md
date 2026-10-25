@@ -448,6 +448,11 @@ How to report a new one: [SECURITY.md](SECURITY.md).
   the target of a symlink. It now creates a new file only, `--force` replaces an existing
   regular file, and a symlink is refused even with `--force` (`claim_seal/output.py`, also used
   by `examples/tamper.py`).
+- **Forgiving span matching no longer crashes on Unicode.** A character that NFKC expands (the
+  ligature `ﬁ`, `İ` under lower-casing) used to shift every later offset, and near the end of a
+  sentence raised `IndexError`, aborting the check. Each emitted code point now maps back to its
+  own original character, so the stored quote is always the right slice of the writing; an
+  unexpected failure in that matching drops the span with the reason `span_normalization_failed`.
 
 ## Related work
 

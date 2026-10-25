@@ -27,21 +27,25 @@ def _norm_with_map(text):
     """Normalised text plus, for each normalised char, its index in the ORIGINAL string.
 
     The returned offsets are the provenance record, so this mapping is the whole risk in
-    normalised matching (tests/test_span_normalization.py asserts on slices, not numbers).
+    normalised matching (tests assert on slices, not numbers). One original character can emit
+    several normalised ones (NFKC turns a ligature into two or three letters, lower() turns
+    U+0130 into two code points), so every EMITTED code point gets its own entry, all pointing at
+    the character that produced it: len(normalised) == len(index map), always.
     """
     out, idx, prev_space = [], [], False
     for i, ch in enumerate(text):
-        c = _SPAN_PUNCT.get(ch, ch)
-        c = unicodedata.normalize("NFKC", c)
-        if c.isspace():
-            if prev_space:
-                continue                      # collapse the run; its FIRST index is already recorded
-            c, prev_space = " ", True
-        else:
+        for c in unicodedata.normalize("NFKC", _SPAN_PUNCT.get(ch, ch)):
+            if c.isspace():
+                if prev_space:
+                    continue                  # collapse the run; its FIRST index is already recorded
+                prev_space = True
+                out.append(" ")
+                idx.append(i)
+                continue
             prev_space = False
-            c = c.lower()
-        out.append(c)
-        idx.append(i)
+            lowered = c.lower()
+            out.append(lowered)
+            idx.extend([i] * len(lowered))
     return "".join(out), idx
 
 
@@ -110,7 +114,10 @@ def validate_span(span_fields, citation: dict, proposal: object) -> tuple[dict |
         for field, text in (span_fields or {}).items():
             if not isinstance(text, str):
                 continue
-            got = find_forgiving(text, quote)
+            try:
+                got = find_forgiving(text, quote)
+            except Exception:  # noqa: BLE001 - hostile Unicode must drop a span, never abort a check
+                return None, "span_normalization_failed"
             if got:
                 soft.append((field, got))
         if len(soft) == 1:
