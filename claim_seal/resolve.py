@@ -323,6 +323,8 @@ def resolve_only(brief: dict, sources: dict, receipts: dict, *,
     checked that and the word would imply somebody had. Mutates `brief` in place, including
     the shape fixes of shape_brief.
     """
+    from .limits import check_inputs  # local: limits imports this module
+    check_inputs(brief, sources)
     shape_brief(brief, in_place=True)
     report = resolve(brief, sources, text_fields=text_fields)
     counts = {"cites-real": 0, "unresolved": 0}

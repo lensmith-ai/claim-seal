@@ -17,6 +17,7 @@ import sys
 
 from .adapters import AdapterError, OpenAICompatible, ReplayJudge
 from .completion import CompletionDisabled
+from .limits import InputTooLarge, load_json_file
 from .support import judge
 from .relations import GOES_FURTHER, UnknownRelation, line_states
 from .attribution import check_span
@@ -25,8 +26,8 @@ from .seal import seal_problem
 
 
 def _load(path: str):
-    with open(path, encoding="utf-8") as handle:
-        return json.load(handle)
+    """One JSON input under claim_seal.limits (size before decoding, UTF-8, depth, values)."""
+    return load_json_file(path)
 
 
 def _model_from(spec: str):
@@ -161,8 +162,11 @@ def cmd_check(args) -> int:
                            pool_size=args.pool, claim_deadline_s=args.deadline)
             _print_report(result, sys.stdout,
                           {sid: e["label"] for sid, e in load_sources(sources).items()})
-    except (BriefError, SourceError, AdapterError, CompletionDisabled) as exc:
+    except (BriefError, SourceError, AdapterError, CompletionDisabled, InputTooLarge) as exc:
         print(f"refused: {exc}", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        print(f"cannot read input: {exc}", file=sys.stderr)
         return 2
     if args.out:
         with open(args.out, "w", encoding="utf-8") as handle:

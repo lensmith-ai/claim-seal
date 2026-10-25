@@ -308,6 +308,16 @@ Sources: `{"source-id": {"label": "...", "items": [{"title": "...", "text": "...
 and text (first 700 characters); `body` is the full captured document evidence is quoted from
 (defaults to `text`). See `examples/`.
 
+**Limits.** Every input is read under fixed ceilings (`claim_seal/limits.py`), and anything over
+one is refused with `InputTooLarge` (the CLI prints `refused:` or `cannot read input:` and exits 2)
+before any model call: an input file over 64 MiB (checked before it is decoded), JSON that is not
+UTF-8 or is nested more than 64 levels deep or holds more than 2,000,000 values, more than 5,000
+claims or 50,000 citations or 50,000 source items, one source body over 16 MiB, all bodies
+together over 64 MiB. A model endpoint's HTTP reply over 8 MiB is refused unread, and a reply that
+is not JSON is an `AdapterError`; model text over 256,000 characters, or nested too deeply to
+decode, is treated as malformed output (that claim is `unchecked`). The ceilings are module
+attributes, read at call time, so a trusted, larger workload can raise them.
+
 ## CLI
 
 ```
@@ -423,6 +433,10 @@ How to report a new one: [SECURITY.md](SECURITY.md).
   closed). Injection test cases: role markers, fake JSON, override commands, requests to copy
   another source, forged end markers, fake claim blocks. The limit is in
   [What it does not do](#what-it-does-not-do).
+- **Inputs and replies have ceilings.** A 10,000-deep JSON array in a brief used to crash the CLI
+  with a `RecursionError` traceback; a source of any size was accepted; a model reply was read
+  whole. Now the ceilings in [Limits](#api) apply, each refusal names the ceiling, and the CLI
+  exits 2. A deeply nested model answer is malformed output, never a crash.
 
 ## Related work
 

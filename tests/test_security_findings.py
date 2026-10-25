@@ -19,6 +19,7 @@ import unittest
 from unittest.mock import patch
 
 import helpers  # puts the repository root on sys.path
+from helpers import Scripted
 
 from claim_seal import judge, line_states, verify, verify_seal
 from claim_seal.adapters import AdapterError, OpenAICompatible, ReplayJudge
@@ -443,6 +444,129 @@ class Finding5SourceTextIsIsolatedData(unittest.TestCase):
                                                   "support_span": INJECTIONS["override"]}])
         result = judge(copy.deepcopy(ONE_CLAIM), copy.deepcopy(HOSTILE_SOURCES), model)
         self.assertEqual(result["brief"]["items"][0]["verification"]["verdict"], "supported")
+
+
+def _run_cli_quiet(*argv):
+    err, out = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+        code = cli_main(list(argv))
+    return code, out.getvalue(), err.getvalue()
+
+
+class Finding6InputAndResponseLimits(unittest.TestCase):
+    """MEDIUM 6: no limits on input files, JSON depth, source bodies or model replies."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = tmp.name
+
+    def _write(self, name, text):
+        path = os.path.join(self.tmp, name)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        return path
+
+    def test_the_review_probe_a_10000_deep_ignored_array_is_a_clean_refusal(self):
+        brief = self._write("brief.json", '{"items": [], "ignored": ' + "[" * 10000 + "]" * 10000 + "}")
+        sources = self._write("sources.json", json.dumps(ONE_SOURCE))
+        code, _, err = _run_cli_quiet("check", brief, sources)
+        self.assertEqual(code, 2)
+        self.assertIn("nested", err)
+        self.assertNotIn("Traceback", err)
+
+    def test_json_deeper_than_the_limit_is_refused_even_when_python_could_parse_it(self):
+        from claim_seal import limits
+        brief = self._write("brief.json", '{"items": [], "x": ' + "[" * (limits.MAX_JSON_DEPTH + 1)
+                            + "]" * (limits.MAX_JSON_DEPTH + 1) + "}")
+        code, _, err = _run_cli_quiet("check", brief, self._write("s.json", json.dumps(ONE_SOURCE)))
+        self.assertEqual(code, 2)
+        self.assertIn(str(limits.MAX_JSON_DEPTH), err)
+
+    def test_an_input_file_over_the_byte_limit_is_refused_before_it_is_decoded(self):
+        from claim_seal import limits
+        brief = self._write("brief.json", json.dumps(ONE_CLAIM) + " " * 400)
+        with patch.object(limits, "MAX_INPUT_FILE_BYTES", 200):
+            code, _, err = _run_cli_quiet("check", brief, self._write("s.json", json.dumps(ONE_SOURCE)))
+            for args in (["verify-seal", brief],):
+                self.assertNotEqual(_run_cli_quiet(*args)[0], 0)
+        self.assertEqual(code, 2)
+        self.assertIn("larger than 200 bytes", err)
+
+    def test_undecodable_input_is_a_clean_refusal(self):
+        path = os.path.join(self.tmp, "bad.json")
+        with open(path, "wb") as handle:
+            handle.write(b'{"items": ["\xff\xfe"]}')
+        code, _, err = _run_cli_quiet("check", path, self._write("s.json", json.dumps(ONE_SOURCE)))
+        self.assertEqual(code, 2)
+        self.assertNotIn("Traceback", err)
+
+    def test_source_bodies_have_a_per_item_and_a_total_ceiling(self):
+        from claim_seal import limits
+        big = copy.deepcopy(ONE_SOURCE)
+        big["alpha"]["items"][0]["body"] = "x" * 2000
+        with patch.object(limits, "MAX_SOURCE_BODY_BYTES", 1000):
+            with self.assertRaises(limits.InputTooLarge) as ctx:
+                judge(copy.deepcopy(ONE_CLAIM), big, _one_claim_judge())
+        self.assertIn("1000 bytes", str(ctx.exception))
+        two = copy.deepcopy(ONE_SOURCE)
+        two["alpha"]["items"].append({"title": "Second", "text": "y" * 800})
+        two["alpha"]["items"][0]["body"] = "x" * 800
+        with patch.object(limits, "MAX_TOTAL_SOURCE_BYTES", 1200):
+            with self.assertRaises(limits.InputTooLarge):
+                judge(copy.deepcopy(ONE_CLAIM), two, _one_claim_judge())
+        sources = self._write("big.json", json.dumps(big))
+        with patch.object(limits, "MAX_SOURCE_BODY_BYTES", 1000):
+            code, _, err = _run_cli_quiet("check", self._write("b.json", json.dumps(ONE_CLAIM)), sources,
+                                          "--judge", "replay:" + self._write("a.json", '{"answers": {}}'))
+        self.assertEqual(code, 2)
+        self.assertIn("refused", err)
+
+    def test_claim_citation_and_source_item_counts_have_ceilings(self):
+        from claim_seal import limits
+        brief = {"items": [copy.deepcopy(ONE_CLAIM["items"][0]) for _ in range(3)]}
+        with patch.object(limits, "MAX_CLAIMS", 2):
+            with self.assertRaises(limits.InputTooLarge):
+                judge(copy.deepcopy(brief), copy.deepcopy(ONE_SOURCE), _one_claim_judge())
+        with patch.object(limits, "MAX_CITATIONS", 2):
+            with self.assertRaises(limits.InputTooLarge):
+                judge(copy.deepcopy(brief), copy.deepcopy(ONE_SOURCE), _one_claim_judge())
+        with patch.object(limits, "MAX_SOURCE_ITEMS", 0):
+            with self.assertRaises(limits.InputTooLarge):
+                judge(copy.deepcopy(ONE_CLAIM), copy.deepcopy(ONE_SOURCE), _one_claim_judge())
+
+    def test_the_http_reply_is_capped_before_it_is_parsed(self):
+        from claim_seal import limits
+
+        class Reply(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+        for body, words in ((json.dumps({"choices": [{"message": {"content": "x" * 5000}}]}).encode(),
+                             "larger than"),
+                            (b"[" * 100000 + b"]" * 100000, "not a JSON"),
+                            (b"\xff not json", "not a JSON")):
+            with self.subTest(words=words), \
+                    patch.dict(os.environ, {"OPENAI_API_KEY": TEST_KEY}, clear=True), \
+                    patch.object(limits, "MAX_MODEL_RESPONSE_BYTES", 1000 if words == "larger than" else 10**7), \
+                    patch("claim_seal.adapters._open", lambda req, timeout, body=body: Reply(body)):
+                with self.assertRaises(AdapterError) as ctx:
+                    OpenAICompatible(model="m")("p")
+                self.assertIn(words, str(ctx.exception))
+
+    def test_model_text_is_capped_and_deep_nesting_in_it_cannot_crash_the_parser(self):
+        from claim_seal import limits
+        from claim_seal.support import extract_json
+        self.assertIsNone(extract_json("{" * 100000 + "}" * 100000))
+        self.assertIsNone(extract_json('{"verdicts": [' + "[" * 100000 + "]" * 100000 + "]}"))
+        with patch.object(limits, "MAX_MODEL_TEXT_CHARS", 50):
+            self.assertIsNone(extract_json('{"verdicts": [], "pad": "' + "x" * 100 + '"}'))
+        deep = Scripted(lambda prompt: '{"verdicts": [' + "[" * 100000 + "]" * 100000 + "]}")
+        result = judge(copy.deepcopy(ONE_CLAIM), copy.deepcopy(ONE_SOURCE), deep)
+        self.assertEqual(result["brief"]["items"][0]["verification"]["verdict"], "unchecked")
+        self.assertEqual(result["verification"]["sharding"]["shards"][0]["reason"], "malformed")
 
 
 if __name__ == "__main__":

@@ -25,6 +25,7 @@ import re
 import time
 
 from .attribution import attribution_checks
+from . import limits
 from .completion import COMPLETION_DISABLED, CompletionDisabled
 from .evidence import (build_claim_evidence, capture_sources, claim_ref, evidence_candidates,
                        source_lineage)
@@ -58,8 +59,21 @@ class ModelText(str):
 
 
 def extract_json(text):
-    """Pull the JSON object out of model output (code fences, preamble, raw newlines)."""
+    """Pull the JSON object out of model output (code fences, preamble, raw newlines).
+
+    Bounded: text over limits.MAX_MODEL_TEXT_CHARS is not parsed, and nesting too deep for the
+    decoder is a parse failure, never a crash. Both come back None, which every caller already
+    records as malformed output (a claim left unchecked)."""
+    try:
+        return _extract_json(text)
+    except (RecursionError, MemoryError):
+        return None
+
+
+def _extract_json(text):
     if not text:
+        return None
+    if len(text) > limits.MAX_MODEL_TEXT_CHARS:
         return None
     text = re.sub(r"```(json)?", "", str(text))
     start = text.find("{")
@@ -83,7 +97,8 @@ def extract_json(text):
             except json.JSONDecodeError:
                 continue
     # strict=False tolerates literal control characters inside strings (a raw newline in long
-    # prose) and nothing else: no trailing commas, single quotes or unquoted keys.
+    # prose) and nothing else: no trailing commas, single quotes or unquoted keys. Kept for real
+    # models that emit raw newlines in `why`; bounded by the size ceiling above.
     try:
         return json.loads(blob, strict=False)
     except json.JSONDecodeError:
@@ -303,6 +318,7 @@ def verify(brief: dict, sources: dict, receipts: dict, model, *,
     """
     if completion:
         raise CompletionDisabled(COMPLETION_DISABLED)
+    limits.check_inputs(brief, sources)
     shape_brief(brief, in_place=True)
     labels = {sid: entry["label"] for sid, entry in load_sources(sources).items()}
     report = resolve(brief, sources, text_fields=text_fields)
@@ -537,6 +553,7 @@ def judge(brief: dict, sources: dict, model, *, spans: bool = True, sharded: boo
     """
     if completion:
         raise CompletionDisabled(COMPLETION_DISABLED)
+    limits.check_inputs(brief, sources)        # before the copies below, and before any model call
     doc = shape_brief(copy.deepcopy(brief), in_place=True)
     captured = capture_sources(sources)
     receipts: dict = {}

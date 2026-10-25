@@ -18,6 +18,9 @@ from .relations import (GOES_FURTHER, LINE_RULE, SPAN_RELATIONS, STEP_BEYOND, Un
                         derive_coarse_relation, goes_further, line_rule, line_states)
 from .resolve import BriefError, SourceError, resolve, resolve_only, shape_brief
 from .seal import seal, seal_problem, verify_seal
+from .limits import InputTooLarge
+from .completion import CompletionDisabled
+from . import limits  # noqa: F401 - the ceilings, as claim_seal.limits
 
 __version__ = "0.1.0"
 
@@ -28,4 +31,5 @@ __all__ = [
     "SPAN_RELATIONS", "STEP_BEYOND", "GOES_FURTHER", "LINE_RULE", "UnknownRelation",
     "derive_coarse_relation", "goes_further", "line_rule", "line_states",
     "ModelText", "extract_json", "SourceError", "BriefError", "shape_brief", "__version__",
+    "InputTooLarge", "CompletionDisabled", "limits",
 ]

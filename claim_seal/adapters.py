@@ -18,6 +18,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from . import limits
 from .prompts import SOURCE_DATA_RULE, strip_source_data
 from .support import ModelText
 
@@ -44,8 +45,7 @@ class ReplayJudge:
 
     @classmethod
     def from_file(cls, path: str) -> "ReplayJudge":
-        with open(path, encoding="utf-8") as handle:
-            doc = json.load(handle)
+        doc = limits.load_json_file(path, "the replay answers")
         return cls(doc.get("answers") or {}, doc.get("completion_answers") or {})
 
     def __call__(self, prompt: str, timeout: float | None = None) -> ModelText:
@@ -171,13 +171,20 @@ class OpenAICompatible:
         req = self.request(prompt)
         try:
             with _open(req, timeout or 180) as resp:
-                doc = json.loads(resp.read().decode("utf-8"))
+                raw = resp.read(limits.MAX_MODEL_RESPONSE_BYTES + 1)
         except urllib.error.HTTPError as exc:
             hint = (" (if the endpoint does not accept response_format, use "
                     "OpenAICompatible(json_mode=False))" if exc.code == 400 and self.json_mode else "")
             raise AdapterError(f"HTTP {exc.code} from the model endpoint{hint}") from None
         except urllib.error.URLError as exc:
             raise AdapterError(f"could not reach the model endpoint: {exc.reason}") from None
+        if len(raw) > limits.MAX_MODEL_RESPONSE_BYTES:
+            raise AdapterError(f"the endpoint's reply is larger than {limits.MAX_MODEL_RESPONSE_BYTES} "
+                               "bytes; refused unread")
+        try:
+            doc = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError, RecursionError):
+            raise AdapterError("the endpoint's reply is not a JSON document") from None
         try:
             text = doc["choices"][0]["message"]["content"] or ""
         except (KeyError, IndexError, TypeError):
