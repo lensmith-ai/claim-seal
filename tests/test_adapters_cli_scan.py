@@ -49,7 +49,7 @@ class ReplayJudgeTests(unittest.TestCase):
 
 
 class OpenAIAdapterTests(unittest.TestCase):
-    """Never touches the network: urlopen is replaced."""
+    """Never touches the network: the adapter's one opener call (_open) is replaced."""
 
     def test_refuses_without_a_model_name_or_a_key(self):
         with patch.dict(os.environ, {}, clear=True):
@@ -77,7 +77,7 @@ class OpenAIAdapterTests(unittest.TestCase):
                                      "choices": [{"message": {"content": '{"verdicts": []}'}}]}).encode())
         env = {"MY_KEY": "sk-test-not-real", "CLAIM_SEAL_BASE_URL": "https://llm.example.test/v1/"}
         with patch.dict(os.environ, env, clear=True), \
-                patch("claim_seal.adapters.urllib.request.urlopen", fake_urlopen):
+                patch("claim_seal.adapters._open", fake_urlopen):
             adapter = OpenAICompatible(model="judge-model", api_key_env="MY_KEY")
             out = adapter("the prompt", timeout=12.5)
         self.assertEqual(out, '{"verdicts": []}')
@@ -95,7 +95,7 @@ class OpenAIAdapterTests(unittest.TestCase):
         def fake_urlopen(req, timeout=None):
             raise urllib.error.HTTPError(req.full_url, 429, "Too Many Requests", {}, None)
         with patch.dict(os.environ, {"OPENAI_API_KEY": "k"}, clear=True), \
-                patch("claim_seal.adapters.urllib.request.urlopen", fake_urlopen):
+                patch("claim_seal.adapters._open", fake_urlopen):
             brief, sources = helpers.corpus()
             result = judge(brief, sources, OpenAICompatible(model="m"), evidence=False)
         reasons = {s["reason"] for s in result["verification"]["sharding"]["shards"]}

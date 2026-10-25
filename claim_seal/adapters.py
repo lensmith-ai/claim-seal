@@ -90,6 +90,25 @@ def _checked_base_url(url: str, *, allow_insecure_loopback: bool) -> str:
                        "and only with OpenAICompatible(allow_insecure_loopback=True))")
 
 
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """Every redirect on an authenticated call is refused, same origin or not: following one
+    would hand the bearer key to wherever the endpoint (or anyone who controls its responses)
+    points, including plain http."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise AdapterError(f"the model endpoint answered with a redirect (HTTP {code}); "
+                           "claim-seal never follows redirects on calls that carry the API key. "
+                           "Set the final endpoint URL directly.")
+
+
+_OPENER = urllib.request.build_opener(_RefuseRedirects())
+
+
+def _open(req: urllib.request.Request, timeout: float):
+    """The only network call in claim-seal: one request, redirects refused."""
+    return _OPENER.open(req, timeout=timeout)
+
+
 class OpenAICompatible:
     """POST {base_url}/chat/completions with one user message; return the first choice's text.
 
@@ -125,14 +144,18 @@ class OpenAICompatible:
             raise AdapterError(f"no API key: set the {self.api_key_env} environment variable")
         body = json.dumps({"model": self.model, "temperature": self.temperature,
                            "messages": [{"role": "user", "content": prompt}]}).encode("utf-8")
-        return urllib.request.Request(
+        req = urllib.request.Request(
             self.base_url + "/chat/completions", data=body, method="POST",
-            headers={"Content-Type": "application/json", "Authorization": "Bearer " + key})
+            headers={"Content-Type": "application/json"})
+        # Unredirected: urllib never copies it onto a redirected request. Redirects are refused
+        # outright anyway (_RefuseRedirects); this is the second lock on the same door.
+        req.add_unredirected_header("Authorization", "Bearer " + key)
+        return req
 
     def __call__(self, prompt: str, timeout: float | None = None) -> ModelText:
         req = self.request(prompt)
         try:
-            with urllib.request.urlopen(req, timeout=timeout or 180) as resp:
+            with _open(req, timeout or 180) as resp:
                 doc = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             raise AdapterError(f"HTTP {exc.code} from the model endpoint") from None

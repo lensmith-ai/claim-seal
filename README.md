@@ -331,6 +331,8 @@ The endpoint must be `https://` with a host and no `user:password@` part; anythi
 refused when the adapter is built, before the key is read. Plain `http://` is accepted only to a
 loopback address (`127.0.0.1`, `::1`, `localhost`) and only when code passes
 `OpenAICompatible(allow_insecure_loopback=True)`; no environment variable can turn that on.
+Redirects are never followed on a call that carries the key: a 3xx answer from the endpoint is an
+error naming the redirect, so set the final endpoint URL directly.
 
 A real model will not reproduce the recorded answers word for word.
 
@@ -372,6 +374,9 @@ How to report a new one: [SECURITY.md](SECURITY.md).
 - **The model endpoint must be https.** `OpenAICompatible` refuses an `http://` (or any other
   non-https) base URL, a URL with no host, and a URL carrying a user name or password, before the
   key is read. Loopback http needs `allow_insecure_loopback=True` in code.
+- **Redirects are refused.** The adapter used to follow a redirect and send the `Authorization`
+  header to the new address, even another host. It now refuses every redirect (same host
+  included), and the key is set as a header urllib never copies onto a redirected request.
 
 ## Related work
 
