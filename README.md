@@ -9,6 +9,10 @@
 
 **Where it stands (2026-10-25).** claim-seal itself does not run in production yet. Its parent, the checker inside my briefing tool, does. On one recorded brief, claim-seal and that checker gave the same results: 4 of 4 claim verdicts and 10 of 10 evidence windows. Running claim-seal every day, beside that checker and on a second daily brief, is built and in review. This section will report what it finds.
 
+**claim-seal checks whether each claim in a piece of writing is actually backed by the sources it cites, sentence by sentence, and seals the result so a later edit shows.**
+
+**How it judges meaning.** A language model reads each cited sentence next to the source passage it cites and decides what the sentence does with the source: says the same thing, goes further than it, contradicts it, or can't tell. It does not search the writing for particular verbs. The short list of relation words below is only the fixed set of labels the model must answer with (a fixed set keeps results comparable from run to run); a near word in the model's answer, such as "conflicts" or "disputes", is read as its label. A sentence that cites a source but has nothing to do with it does not pass: the supporting quote must be found word for word in that source, or the claim is not supported. It only checks writing against the sources that writing cites; it cannot check a sentence against a source it was never given. One separate check is word-based and says so: the overclaim heuristic (see [Attribution overclaim](#attribution-overclaim-a-heuristic)) reads the verb the writing itself uses about its source ("the report says") and only adds a warning.
+
 Check each claim in a piece of writing against the sources it cites. Record, sentence by
 sentence, whether the writing says what a source says, goes further than it, or contradicts it
 (the "goes further" check). Seal the claim-evidence rows (per claim and citation: the outcome, where each
@@ -356,7 +360,7 @@ checkpoints and its per-call usage telemetry are not included.
 
 ## Related work
 
-**Mole** ([github.com/Arkaniad/mole](https://github.com/Arkaniad/mole), Apache-2.0) is a
+**Mole** ([github.com/lajosdeme/mole](https://github.com/lajosdeme/mole), Apache-2.0) is a
 deep-research agent. It discards any quote it cannot find verbatim in the page it came from, and
 it rechecks its claims against their sources. claim-seal is not a research agent: it checks text
 that any tool or person wrote, marks each sentence as saying what its source says, going further
