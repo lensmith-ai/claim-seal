@@ -1,0 +1,4 @@
+# The one build dependency, pinned by version AND by the sha256 of its PyPI wheel. Installed with
+# pip --require-hashes by tools/build_check.sh; claim-seal itself has no runtime dependencies.
+setuptools==78.1.1 \
+    --hash=sha256:c3a9c4211ff4c309edb8b8c4f1cbfa7ae324c4ba9f91ff254e3d305b9fd54561

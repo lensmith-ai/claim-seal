@@ -16,6 +16,11 @@ GitHub's private vulnerability reporting: on
 [github.com/lensmith-ai/claim-seal](https://github.com/lensmith-ai/claim-seal), open the
 **Security** tab and choose **Report a vulnerability**. Only the maintainers can read the report.
 
+If the **Report a vulnerability** button is not there, private reporting has not been switched on
+for the repository yet. Then open a public issue titled "Security contact request" that says only
+that you have a security report and asks for a private channel. Put no details of the problem in
+it.
+
 Please include:
 
 - the claim-seal version or commit;
@@ -28,10 +33,9 @@ placeholder key (`TEST_ONLY_KEY`) and invented text, as the tests in this reposi
 
 ## What to expect
 
-This is a small project with one maintainer, so responses are best effort. The aim is to
-acknowledge a report within 7 days, agree on the problem and a fix plan after that, and publish
-the fix together with a GitHub security advisory that credits you, unless you ask not to be
-named. Please give us a reasonable chance to ship the fix before you disclose the details.
+Reports are handled on a best-effort basis; no response or remediation timeline is guaranteed.
+This is a small project with one maintainer. Please give the maintainer a chance to ship a fix
+before you disclose the details.
 
 ## Known limits that are not vulnerabilities
 

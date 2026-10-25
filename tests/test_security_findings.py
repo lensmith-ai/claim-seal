@@ -808,5 +808,48 @@ class Finding9SupplyChainControls(unittest.TestCase):
         self.assertRegex(ci, r"(?m)^permissions:\s*\n\s+contents:\s*read\s*$")
 
 
+class Finding9bReleaseGatesAndHonestPolicy(unittest.TestCase):
+    """Re-review (Astra job 9000000175), finding 9 still OPEN: no CodeQL workflow, no automated
+    clean build-and-install smoke gate, no owner-gated release checklist; SECURITY.md promised a
+    route that is not switched on yet and a timeline the owner had not confirmed."""
+
+    def _read(self, *parts):
+        with open(os.path.join(helpers.ROOT, *parts), encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_a_codeql_workflow_for_python_is_pinned_and_least_privilege(self):
+        wf = self._read(".github", "workflows", "codeql.yml")
+        for ref in re.findall(r"uses:\s*(\S+)", wf):
+            self.assertRegex(ref, r"^[\w.-]+/[\w./-]+@[0-9a-f]{40}$")
+        self.assertIn("github/codeql-action/init@", wf)
+        self.assertIn("github/codeql-action/analyze@", wf)
+        self.assertRegex(wf, r"languages:\s*python")
+        self.assertRegex(wf, r"(?m)^permissions:\s*\n\s+contents:\s*read")
+        self.assertIn("security-events: write", wf)
+
+    def test_ci_builds_installs_and_smokes_the_artifacts(self):
+        ci = self._read(".github", "workflows", "ci.yml")
+        self.assertIn("sh tools/build_check.sh", ci)
+        script = self._read("tools", "build_check.sh")
+        for needle in ("--require-hashes", "build_sdist", "build_wheel", "--no-index", "--no-deps",
+                       "demo-output.txt", "verify-seal", "sha256sum"):
+            self.assertIn(needle, script)
+        reqs = self._read("tools", "build-requirements.txt")
+        self.assertRegex(reqs, r"(?m)^setuptools==78\.1\.1 \\\n\s+--hash=sha256:[0-9a-f]{64}$")
+
+    def test_owner_gated_release_steps_each_name_the_receipt_to_observe(self):
+        text = self._read("RELEASING.md")
+        for needle in ("private-vulnerability-reporting", "secret_scanning", "push_protection",
+                       "git tag -s", "git tag -v", "SHA256SUMS", "gh attestation verify"):
+            self.assertIn(needle, text)
+
+    def test_security_md_promises_nothing_unconfirmed_and_has_a_fallback_route(self):
+        text = self._read("SECURITY.md")
+        self.assertIn("Reports are handled on a best-effort basis; no response or remediation "
+                      "timeline is guaranteed.", text)
+        self.assertNotIn("7 days", text)
+        self.assertIn("If the **Report a vulnerability** button is not there", text)
+
+
 if __name__ == "__main__":
     unittest.main()

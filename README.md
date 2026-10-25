@@ -382,6 +382,7 @@ python3 tools/scan_private.py        # generic checks: server paths, key/token a
 CLAIM_SEAL_DENYLIST=/path/outside/the/repo.txt python3 tools/scan_private.py   # plus your own terms
 python3 tools/scan_private.py --history                                       # every past commit too
 sh tools/ci.sh                       # both, plus the demo
+sh tools/build_check.sh              # build, clean install and demo of the wheel (needs network once)
 ```
 
 ## Lenses
@@ -464,7 +465,13 @@ How to report a new one: [SECURITY.md](SECURITY.md).
   which versions get fixes. The build requirement is pinned (`setuptools==78.1.1`, was
   `setuptools>=61`), the license is the SPDX expression `MIT` with `LICENSE` as its file, and
   the CI workflow pins each GitHub Action to a commit SHA, runs with `contents: read` only and
-  does not keep the checkout token.
+  does not keep the checkout token. CI also runs `tools/build_check.sh`: it builds the sdist and
+  wheel with the build requirement pinned by hash (`tools/build-requirements.txt`), installs the
+  wheel into an empty venv with no index, runs the demo with the installed `claim-seal` command
+  and prints the artifacts' SHA-256 sums. A CodeQL workflow analyses the Python code. The steps
+  that are repository settings or signatures (private vulnerability reporting, secret scanning
+  and push protection, signed tags, attestations) are the owner's, listed with the receipt for
+  each in [RELEASING.md](RELEASING.md); none of them is claimed as done here.
 
 ## Related work
 
