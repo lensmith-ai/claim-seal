@@ -329,7 +329,13 @@ python3 -m claim_seal verify-seal result.json                 # exit 0 ok, 1 fai
 
 Options: `--whole-brief`, `--no-spans`, `--no-local-placement`, `--no-evidence`, `--completion`
 (disabled in this release: refused with exit 2),
-`--pool N`, `--deadline S`.
+`--pool N`, `--deadline S`, `--force`.
+
+`--out` creates a new file (mode 0600 before your umask) and refuses, with exit 2 and before the
+check runs, a path that already exists. `--force` lets it replace an existing regular file. A
+symlink is always refused, with or without `--force`, and so is a directory or any other
+non-regular file. Only the last path component is protected from links; the directories leading
+to it are yours to choose. `examples/tamper.py` writes the same way.
 
 ## Demo (offline)
 
@@ -341,11 +347,12 @@ after the answers (resolution, span checks, evidence location, line states, the 
 check, the seal) runs for real.
 
 ```
+d=$(mktemp -d)                                                  # --out never overwrites
 python3 -m claim_seal check examples/brief.json examples/sources.json \
-    --judge replay:examples/replay-answers.json --out /tmp/result.json
-python3 -m claim_seal verify-seal /tmp/result.json                         # OK
-python3 examples/tamper.py /tmp/result.json /tmp/tampered.json upgrade
-python3 -m claim_seal verify-seal /tmp/tampered.json                       # CHAIN FAIL
+    --judge replay:examples/replay-answers.json --out "$d/result.json"
+python3 -m claim_seal verify-seal "$d/result.json"                         # OK
+python3 examples/tamper.py "$d/result.json" "$d/tampered.json" upgrade
+python3 -m claim_seal verify-seal "$d/tampered.json"                       # CHAIN FAIL
 ```
 
 The expected output is `examples/demo-output.txt`. With a real model, using any OpenAI-compatible
@@ -437,6 +444,10 @@ How to report a new one: [SECURITY.md](SECURITY.md).
   with a `RecursionError` traceback; a source of any size was accepted; a model reply was read
   whole. Now the ceilings in [Limits](#api) apply, each refusal names the ceiling, and the CLI
   exits 2. A deeply nested model answer is malformed output, never a crash.
+- **`--out` no longer overwrites or follows symlinks.** It used to replace any file, including
+  the target of a symlink. It now creates a new file only, `--force` replaces an existing
+  regular file, and a symlink is refused even with `--force` (`claim_seal/output.py`, also used
+  by `examples/tamper.py`).
 
 ## Related work
 

@@ -1,7 +1,7 @@
 """claim-seal command line.
 
   claim-seal check BRIEF.json SOURCES.json [--judge replay:ANSWERS.json | --judge openai[:MODEL]]
-                   [--out RESULT.json] [--whole-brief] [--no-spans] [--no-evidence] ...
+                   [--out RESULT.json [--force]] [--whole-brief] [--no-spans] [--no-evidence] ...
   claim-seal verify-seal RECORD.json [RECORD.json ...]
 
 check without --judge runs pass 1 only (are the cited references real?) and says so.
@@ -18,6 +18,7 @@ import sys
 from .adapters import AdapterError, OpenAICompatible, ReplayJudge
 from .completion import CompletionDisabled
 from .limits import InputTooLarge, load_json_file
+from .output import OutputRefused, check_out_path, write_text
 from .support import judge
 from .relations import GOES_FURTHER, UnknownRelation, line_states
 from .attribution import check_span
@@ -138,6 +139,12 @@ def _tally(rows, key):
 
 
 def cmd_check(args) -> int:
+    if args.out:
+        try:
+            check_out_path(args.out, force=args.force)   # before any work, and again at the write
+        except OutputRefused as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 2
     try:
         brief, sources = _load(args.brief), _load(args.sources)
     except (OSError, ValueError) as exc:
@@ -169,9 +176,12 @@ def cmd_check(args) -> int:
         print(f"cannot read input: {exc}", file=sys.stderr)
         return 2
     if args.out:
-        with open(args.out, "w", encoding="utf-8") as handle:
-            json.dump(result, handle, ensure_ascii=False, indent=1)
-            handle.write("\n")
+        try:
+            write_text(args.out, json.dumps(result, ensure_ascii=False, indent=1) + "\n",
+                       force=args.force)
+        except (OutputRefused, OSError) as exc:
+            print(f"refused: could not write {args.out}: {exc}", file=sys.stderr)
+            return 2
         print(f"\nwrote {args.out}")
     return 0
 
@@ -225,7 +235,10 @@ def main(argv: list[str] | None = None) -> int:
     check.add_argument("brief", help="the brief (claims) JSON")
     check.add_argument("sources", help="the sources JSON")
     check.add_argument("--judge", help="replay:ANSWERS.json (offline) or openai[:MODEL]")
-    check.add_argument("--out", help="write the full result JSON here")
+    check.add_argument("--out", help="write the full result JSON to this NEW file (never through a "
+                                     "symlink)")
+    check.add_argument("--force", action="store_true",
+                       help="let --out replace an existing regular file")
     check.add_argument("--whole-brief", action="store_true",
                        help="one model call for the whole brief instead of one per claim "
                             "(no per-sentence relations)")

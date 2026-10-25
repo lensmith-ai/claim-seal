@@ -569,5 +569,77 @@ class Finding6InputAndResponseLimits(unittest.TestCase):
         self.assertEqual(result["verification"]["sharding"]["shards"][0]["reason"], "malformed")
 
 
+EXAMPLES = os.path.join(helpers.ROOT, "examples")
+DEMO = [os.path.join(EXAMPLES, "brief.json"), os.path.join(EXAMPLES, "sources.json"),
+        "--judge", "replay:" + os.path.join(EXAMPLES, "replay-answers.json")]
+VICTIM_TEXT = "DO-NOT-OVERWRITE\n"
+
+
+class Finding7OutNeverClobbersOrFollowsSymlinks(unittest.TestCase):
+    """MEDIUM 7: --out overwrote any file and followed a symlink to its target."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = tmp.name
+        self.victim = os.path.join(self.tmp, "victim.txt")
+        with open(self.victim, "w", encoding="utf-8") as handle:
+            handle.write(VICTIM_TEXT)
+
+    def _victim(self):
+        with open(self.victim, encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_the_review_probe_a_symlinked_out_is_refused_with_or_without_force(self):
+        link = os.path.join(self.tmp, "out-link.json")
+        os.symlink(self.victim, link)
+        for extra in ([], ["--force"]):
+            with self.subTest(extra=extra):
+                code, out, err = _run_cli_quiet("check", *DEMO, "--out", link, *extra)
+                self.assertEqual(code, 2)
+                self.assertIn("symlink", err)
+                self.assertEqual(self._victim(), VICTIM_TEXT)
+                self.assertTrue(os.path.islink(link))
+
+    def test_an_existing_file_is_refused_before_the_check_runs_unless_force(self):
+        code, out, err = _run_cli_quiet("check", *DEMO, "--out", self.victim)
+        self.assertEqual(code, 2)
+        self.assertIn("--force", err)
+        self.assertEqual(out, "")                       # refused before the judge ran
+        self.assertEqual(self._victim(), VICTIM_TEXT)
+        code, out, _ = _run_cli_quiet("check", *DEMO, "--out", self.victim, "--force")
+        self.assertEqual(code, 0)
+        with open(self.victim, encoding="utf-8") as handle:
+            self.assertIn("claim_evidence", json.load(handle))
+
+    def test_a_new_file_is_created_private_and_a_directory_is_refused(self):
+        path = os.path.join(self.tmp, "result.json")
+        self.assertEqual(_run_cli_quiet("check", *DEMO, "--out", path)[0], 0)
+        self.assertEqual(os.stat(path).st_mode & 0o077, 0)
+        self.assertEqual(_run_cli_quiet("check", *DEMO, "--out", self.tmp, "--force")[0], 2)
+
+    def test_a_symlink_swapped_in_after_the_early_check_is_still_not_followed(self):
+        from claim_seal.output import OutputRefused, write_text
+        link = os.path.join(self.tmp, "late-link.json")
+        os.symlink(self.victim, link)
+        for force in (False, True):
+            with self.subTest(force=force), self.assertRaises(OutputRefused):
+                write_text(link, "{}", force=force, _skip_precheck=True)
+        self.assertEqual(self._victim(), VICTIM_TEXT)
+
+    def test_the_demo_tamper_script_refuses_to_overwrite(self):
+        import subprocess
+        import sys
+        result = os.path.join(self.tmp, "result.json")
+        self.assertEqual(_run_cli_quiet("check", *DEMO, "--out", result)[0], 0)
+        link = os.path.join(self.tmp, "tampered.json")
+        os.symlink(self.victim, link)
+        for dst in (self.victim, link):
+            proc = subprocess.run([sys.executable, os.path.join(EXAMPLES, "tamper.py"), result, dst],
+                                  capture_output=True, text=True)
+            self.assertNotEqual(proc.returncode, 0, dst)
+        self.assertEqual(self._victim(), VICTIM_TEXT)
+
+
 if __name__ == "__main__":
     unittest.main()
