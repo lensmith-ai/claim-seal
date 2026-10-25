@@ -698,5 +698,37 @@ class Finding8UnicodeSpanNormalizationIsTotal(unittest.TestCase):
         self.assertEqual(span["producer"], "model-quote-normalized-v1")
 
 
+class Finding9SupplyChainControls(unittest.TestCase):
+    """MEDIUM 9 (and LOW 10): no SECURITY.md, an open-ended build requirement, CI actions on
+    mutable tags."""
+
+    def _read(self, *parts):
+        with open(os.path.join(helpers.ROOT, *parts), encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_security_md_says_how_to_report_and_which_versions_are_supported(self):
+        text = self._read("SECURITY.md")
+        for needle in ("## Supported versions", "## Reporting a vulnerability", "0.1",
+                       "Report a vulnerability", "Do not open a public issue"):
+            self.assertIn(needle, text)
+        self.assertIn("SECURITY.md", self._read("README.md"))
+
+    def test_the_build_requirement_is_pinned_to_one_version(self):
+        requires = re.search(r"^requires\s*=\s*\[(.*?)\]", self._read("pyproject.toml"), re.M | re.S).group(1)
+        pins = re.findall(r'"([^"]+)"', requires)
+        self.assertTrue(pins)
+        for pin in pins:
+            self.assertRegex(pin, r"^[A-Za-z0-9_.-]+==\d+(\.\d+)+$")
+        self.assertIn('dependencies = []', self._read("pyproject.toml"))
+
+    def test_ci_actions_are_pinned_to_commit_shas_with_read_only_permissions(self):
+        ci = self._read(".github", "workflows", "ci.yml")
+        uses = re.findall(r"uses:\s*(\S+)", ci)
+        self.assertTrue(uses)
+        for ref in uses:
+            self.assertRegex(ref, r"^[\w.-]+/[\w.-]+@[0-9a-f]{40}$")
+        self.assertRegex(ci, r"(?m)^permissions:\s*\n\s+contents:\s*read\s*$")
+
+
 if __name__ == "__main__":
     unittest.main()

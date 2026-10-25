@@ -1,5 +1,7 @@
 [build-system]
-requires = ["setuptools>=61"]
+# Pinned to one reviewed version (after the fixes for CVE-2024-6345 and CVE-2025-47273). claim-seal
+# has no runtime dependencies; this is only what builds the sdist and wheel.
+requires = ["setuptools==78.1.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +9,8 @@ name = "claim-seal"
 version = "0.1.0"
 description = "Check each claim against the sources it cites, record where the writing steps beyond them, and seal the claim-evidence rows (not the verdicts or sentence labels) in a SHA-256 digest chain."
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = []
 

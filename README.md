@@ -254,7 +254,8 @@ for `norm/v1`, although the transformation is the same.
 ## Install
 
 Nothing to install for the library, tests or demo: run from the repository root. To get the
-`claim-seal` command: `python3 -m venv .venv && .venv/bin/pip install -e .`
+`claim-seal` command: `python3 -m venv .venv && .venv/bin/pip install -e .` There are no runtime
+dependencies; the build itself uses one pinned version, `setuptools==78.1.1` (`pyproject.toml`).
 
 ## API
 
@@ -453,6 +454,11 @@ How to report a new one: [SECURITY.md](SECURITY.md).
   sentence raised `IndexError`, aborting the check. Each emitted code point now maps back to its
   own original character, so the stored quote is always the right slice of the writing; an
   unexpected failure in that matching drops the span with the reason `span_normalization_failed`.
+- **Supply chain.** [SECURITY.md](SECURITY.md) says how to report a vulnerability privately and
+  which versions get fixes. The build requirement is pinned (`setuptools==78.1.1`, was
+  `setuptools>=61`), the license is the SPDX expression `MIT` with `LICENSE` as its file, and
+  the CI workflow pins each GitHub Action to a commit SHA, runs with `contents: read` only and
+  does not keep the checkout token.
 
 ## Related work
 
