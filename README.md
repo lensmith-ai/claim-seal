@@ -2,8 +2,8 @@
 
 Check each claim in a piece of writing against the sources it cites. Record, sentence by
 sentence, whether the writing says what a source says, goes further than it, or contradicts it
-(the "goes further" check). Seal the claim-evidence rows (per claim and citation: the outcome, the located
-source passages, the relation verb, whether the judge chose that verb, and the source binding)
+(the "goes further" check). Seal the claim-evidence rows (per claim and citation: the outcome, where each
+supporting passage sits in the source (offsets and SHA-256 digests, never the text), the relation verb, whether the judge chose that verb, and the source binding)
 in a SHA-256 digest chain, so a later edit to those rows shows. The seal does NOT cover the claim
 verdicts and their reasons, the per-sentence relations and goes-further labels, or the record's
 rule-id summary: see [what the seal covers](#the-seal-and-its-limits).
