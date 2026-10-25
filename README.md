@@ -268,8 +268,9 @@ budget. Return `claim_seal.ModelText(text, model="name")` to record which model 
 
 `judge()` options (defaults are the composer's production settings): `sharded=True` (one call per
 claim; required for per-sentence relations), `spans=True`, `local_placement=True`,
-`evidence=True`, `completion=False` (try one more source item for `partial` claims, verdict
-`supported-completed`), `locating_quote=False`, `pool_size=2`, `claim_deadline_s=120`.
+`evidence=True`, `completion=False`, `locating_quote=False`, `pool_size=2`, `claim_deadline_s=120`.
+`completion=True` (try one more source item for a `partial` claim) is **disabled in this
+release** and raises `CompletionDisabled`: the citation it added sat outside the sealed record.
 
 Also: `resolve_only()` (pass 1 for writing that exaggerates on purpose: verdicts `cites-real` or
 `unresolved`, never `supported`), `capture_sources()`, `source_lineage()`, `seal()`,
@@ -307,7 +308,8 @@ python3 -m claim_seal check claims.json sources.json          # pass 1 only
 python3 -m claim_seal verify-seal result.json                 # exit 0 ok, 1 fail, 2 nothing
 ```
 
-Options: `--whole-brief`, `--no-spans`, `--no-local-placement`, `--no-evidence`, `--completion`,
+Options: `--whole-brief`, `--no-spans`, `--no-local-placement`, `--no-evidence`, `--completion`
+(disabled in this release: refused with exit 2),
 `--pool N`, `--deadline S`.
 
 ## Demo (offline)
@@ -393,6 +395,12 @@ How to report a new one: [SECURITY.md](SECURITY.md).
   a page can no longer show model-only support. With `--no-evidence` no claim is `supported`.
   `verify()` (the lower-level step under `judge()`) applies the same gate; `gate_support=False`
   returns the raw model reading, for tests of the parser only.
+- **Evidence completion is disabled.** With `completion=True` a `partial` claim could become
+  `supported-completed` by gaining a citation after the evidence record was sealed: that citation
+  had no evidence row, no located passage and no place in the seal, and the seal still verified.
+  `judge(completion=True)`, `verify(completion=True)` and `--completion` now refuse
+  (`CompletionDisabled`, CLI exit 2) until the added citation is bound and sealed like every other.
+  It was off by default, so default results do not change.
 
 ## Related work
 

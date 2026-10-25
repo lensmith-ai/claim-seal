@@ -25,7 +25,7 @@ import re
 import time
 
 from .attribution import attribution_checks
-from .completion import complete_partials
+from .completion import COMPLETION_DISABLED, CompletionDisabled
 from .evidence import (build_claim_evidence, capture_sources, claim_ref, evidence_candidates,
                        source_lineage)
 from .prompts import build_claim_prompt, build_prompt
@@ -296,9 +296,13 @@ def verify(brief: dict, sources: dict, receipts: dict, model, *,
     gate_support=False returns the model's raw reading, ungated: a "supported" there is the
     model's word only and must never be shown to a reader as support.
 
+    completion=True is refused (CompletionDisabled): see claim_seal.completion.
+
     A model exception on the whole-brief path propagates (the caller owns that failure); on the
     per-claim path it is classified per claim.
     """
+    if completion:
+        raise CompletionDisabled(COMPLETION_DISABLED)
     shape_brief(brief, in_place=True)
     labels = {sid: entry["label"] for sid, entry in load_sources(sources).items()}
     report = resolve(brief, sources, text_fields=text_fields)
@@ -474,16 +478,6 @@ def verify(brief: dict, sources: dict, receipts: dict, model, *,
             # What actually answered, never the configured name.
             spans["model_executed"] = executed_model
             rec["spans"] = spans
-    if completion:
-        rec["completion"] = complete_partials(brief, sources, receipts, enabled=True,
-                                              cap=completion_cap, model=model,
-                                              text_fields=text_fields)
-        counts = {"supported": 0, "supported-completed": 0, "partial": 0,
-                  "unsupported": 0, "unresolved": 0, "unchecked": 0}
-        for claim in report["claims"]:
-            target = target_for_claim(brief, claim)
-            verdict = ((target or {}).get("verification") or {}).get("verdict", "unchecked")
-            counts[verdict] = counts.get(verdict, 0) + 1
     rec["verdicts"] = counts
     receipts["verification"] = rec
     return rec
@@ -538,8 +532,11 @@ def judge(brief: dict, sources: dict, model, *, spans: bool = True, sharded: boo
 
     Defaults are the configuration the composer runs in production: spans on, one claim per
     model call, local span placement on, the locating-quote wording off, the evidence pass on,
-    completion off.
+    completion off. completion=True is refused in this release (CompletionDisabled): the
+    citation it appends would sit outside the sealed evidence record.
     """
+    if completion:
+        raise CompletionDisabled(COMPLETION_DISABLED)
     doc = shape_brief(copy.deepcopy(brief), in_place=True)
     captured = capture_sources(sources)
     receipts: dict = {}

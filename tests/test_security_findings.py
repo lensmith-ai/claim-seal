@@ -6,18 +6,22 @@ the only key is a planted test value.
 """
 from __future__ import annotations
 
+import contextlib
 import copy
 import http.server
+import io
 import json
 import os
+import tempfile
 import threading
 import unittest
 from unittest.mock import patch
 
 import helpers  # puts the repository root on sys.path
 
-from claim_seal import judge, line_states, verify_seal
-from claim_seal.adapters import AdapterError, OpenAICompatible
+from claim_seal import judge, line_states, verify, verify_seal
+from claim_seal.adapters import AdapterError, OpenAICompatible, ReplayJudge
+from claim_seal.cli import main as cli_main
 
 TEST_KEY = "TEST_ONLY_KEY"
 
@@ -267,6 +271,76 @@ class Finding3PublicSupportNeedsALocatedPassage(unittest.TestCase):
                        and r["claim_ref"]["kind"] == "item" and r["support_state"] == "supported"
                        and r["evidence"] == "present" and r["evidence_spans"]]
             self.assertEqual(item["verification"]["verdict"] == "supported", bool(located), item_index)
+
+
+PARTIAL_CLAIM = "The relay clears ten thousand messages an hour and the compaction pass cut memory by a third."
+COMPLETION_BRIEF = {"items": [{"insight": PARTIAL_CLAIM,
+                               "sources": [{"id": "alpha", "ref": "Queue rewrite ships"}]}]}
+COMPLETION_SOURCES = {"alpha": {"label": "Alpha Weekly", "items": [
+    {"title": "Queue rewrite ships",
+     "text": "The relay now clears ten thousand messages an hour after the queue rewrite."},
+    {"title": "Compaction pass measured",
+     "text": "The compaction pass cut resident memory by a third on the reference workload."}]}}
+
+
+def _completion_judge():
+    return ReplayJudge(
+        {PARTIAL_CLAIM: {"verdict": "partial", "why": "only the throughput half is cited",
+                         "evidence_spans": [{"citation_index": 0, "support_span": LOCATED}]}},
+        {PARTIAL_CLAIM: {"combined_verdict": "completed", "candidate_adds_material_support": True,
+                         "why": "the second item carries the memory half"}})
+
+
+class Finding4CompletionCannotAddAnUnsealedCitation(unittest.TestCase):
+    """HIGH 4: completion appended a "supported-completed" citation after the evidence record
+    was sealed, so the final citations and the sealed rows disagreed while the seal verified."""
+
+    def _rows_per_claim(self, result):
+        rows: dict = {}
+        for row in result["claim_evidence"]["outcomes"]:
+            rows.setdefault(row["claim_ref"]["item_index"], []).append(row["citation_index"])
+        return rows
+
+    def test_the_review_probe_never_yields_a_citation_without_a_sealed_row(self):
+        try:
+            result = judge(copy.deepcopy(COMPLETION_BRIEF), copy.deepcopy(COMPLETION_SOURCES),
+                           _completion_judge(), completion=True)
+        except ValueError as exc:
+            self.assertIn("completion", str(exc))
+            return
+        # Reached only if completion ran: then every final citation must have its sealed row.
+        v = result["brief"]["items"][0]["verification"]
+        self.assertEqual(list(range(len(v["citations"]))), self._rows_per_claim(result)[0])
+
+    def test_completion_is_refused_by_judge_verify_and_the_cli(self):
+        with self.assertRaises(ValueError) as ctx:
+            judge(copy.deepcopy(COMPLETION_BRIEF), copy.deepcopy(COMPLETION_SOURCES),
+                  _completion_judge(), completion=True)
+        self.assertIn("not be bound or sealed", str(ctx.exception))
+        with self.assertRaises(ValueError):
+            verify(copy.deepcopy(COMPLETION_BRIEF), copy.deepcopy(COMPLETION_SOURCES), {},
+                   _completion_judge(), completion=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = []
+            for name, doc in (("brief", COMPLETION_BRIEF), ("sources", COMPLETION_SOURCES),
+                              ("answers", {"answers": {}})):
+                paths.append(os.path.join(tmp, name + ".json"))
+                with open(paths[-1], "w", encoding="utf-8") as handle:
+                    json.dump(doc, handle)
+            err, out = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+                code = cli_main(["check", paths[0], paths[1], "--judge", "replay:" + paths[2],
+                                 "--completion"])
+        self.assertEqual(code, 2)
+        self.assertIn("refused", err.getvalue())
+
+    def test_the_default_path_has_one_sealed_row_per_final_citation(self):
+        result = judge(copy.deepcopy(COMPLETION_BRIEF), copy.deepcopy(COMPLETION_SOURCES), _completion_judge())
+        v = result["brief"]["items"][0]["verification"]
+        self.assertEqual(v["verdict"], "partial")
+        self.assertNotIn("completion", result["verification"])
+        self.assertEqual(self._rows_per_claim(result), {0: list(range(len(v["citations"])))})
+        self.assertTrue(verify_seal(result["claim_evidence"]))
 
 
 if __name__ == "__main__":

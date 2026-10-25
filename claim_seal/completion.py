@@ -1,4 +1,12 @@
-"""Optional, default-OFF evidence completion for claims judged "partial".
+"""Evidence completion for claims judged "partial": DISABLED in this release.
+
+judge(completion=True), verify(completion=True) and `claim-seal check --completion` raise
+CompletionDisabled. The reason (security review, finding 4): a "completed" answer appends a
+citation AFTER the claim-evidence record is built and sealed, so the final claim cites a source
+that has no evidence row, no located passage and no place in the seal, while the seal still
+verifies. It comes back only when the added citation is captured, digest-bound, located and
+sealed like every other. complete_partials() below is kept as the building block (and tested on
+its own); nothing in the library calls it.
 
 For a partial claim, a deterministic, versioned scorer picks ONE other item from the given
 sources that covers the claim words the cited set leaves uncovered, and asks the model whether
@@ -12,6 +20,13 @@ from .prompts import completion_prompt
 from .resolve import TEXT_FIELDS, _norm, _tokens, index_sources, resolve, target_for_claim
 
 COMPLETION_CAP = 6
+COMPLETION_DISABLED = ("evidence completion is disabled in this release: the citation it adds "
+                       "would not be bound or sealed in the claim-evidence record")
+
+
+class CompletionDisabled(ValueError):
+    """completion=True was asked for; see the module docstring."""
+
 COMPLETION_SCORER_VERSION = "residual-overlap/v1"
 _COMPLETION_STOP_WORDS = {
     "about", "after", "again", "also", "and", "are", "been", "but", "can", "does", "for",

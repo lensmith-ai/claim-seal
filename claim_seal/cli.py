@@ -16,6 +16,7 @@ import json
 import sys
 
 from .adapters import AdapterError, OpenAICompatible, ReplayJudge
+from .completion import CompletionDisabled
 from .support import judge
 from .relations import GOES_FURTHER, UnknownRelation, line_states
 from .attribution import check_span
@@ -160,7 +161,7 @@ def cmd_check(args) -> int:
                            pool_size=args.pool, claim_deadline_s=args.deadline)
             _print_report(result, sys.stdout,
                           {sid: e["label"] for sid, e in load_sources(sources).items()})
-    except (BriefError, SourceError, AdapterError) as exc:
+    except (BriefError, SourceError, AdapterError, CompletionDisabled) as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 2
     if args.out:
@@ -230,7 +231,8 @@ def main(argv: list[str] | None = None) -> int:
     check.add_argument("--no-evidence", action="store_true",
                        help="skip the evidence pass (no claim-evidence record, no seal)")
     check.add_argument("--completion", action="store_true",
-                       help="try to complete partial claims with one more source item")
+                       help="disabled in this release (refused, exit 2): the citation it adds "
+                            "would not be sealed")
     check.add_argument("--pool", type=int, default=2, help="parallel per-claim calls (default 2)")
     check.add_argument("--deadline", type=float, default=120.0,
                        help="per-claim deadline in seconds, queue wait included (default 120)")
