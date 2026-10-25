@@ -5,9 +5,9 @@
 > **AI;DR (AI, didn't read)**
 > Claude wrote this code and this README. I haven't read either, and I can't explain or test it line by line myself.
 > What I have done: I use the checker this was extracted from in my own briefing tool. I routinely click through to the cited sources by hand, to see that what a claim says is really in the source, and that when a claim goes further, the going further is real. That's often the point, since claims built on plausible implication are the ones people follow. Everything I've checked has held up.
-> claim-seal itself is the extracted version. 230 automated tests pass, and an independent AI reviewer compared this README against the code before release. Treat it as a working experiment, and open an issue if something's off. (Arya)
+> claim-seal itself is the extracted version. 275 automated tests pass, an independent AI reviewer compared this README against the code before release, and the problems an independent AI security review found are fixed, each with a test ([what changed](#what-changed-after-the-security-review)). Treat it as a working experiment, and open an issue if something's off. (Arya)
 
-**Where it stands (2026-10-25).** claim-seal itself does not run in production yet. Its parent, the checker inside my briefing tool, does. On one recorded brief, claim-seal and that checker gave the same results: 4 of 4 claim verdicts and 10 of 10 evidence windows. Running claim-seal every day, beside that checker and on a second daily brief, is built and in review. This section will report what it finds.
+**Where it stands (2026-10-25).** claim-seal itself does not run in production yet. Its parent, the checker inside my briefing tool, does. On one recorded brief, claim-seal and that checker gave the same results: 4 of 4 claim verdicts and 10 of 10 evidence windows. Those figures are from the version before the security fixes (commit b5e994a); the fixes change the judge prompts and when a verdict counts as supported, so agreement has to be measured again. Running claim-seal every day, beside that checker and on a second daily brief, is built and in review. This section will report what it finds.
 
 **claim-seal checks whether each claim in a piece of writing is actually backed by the sources it cites, sentence by sentence, and seals the result so a later edit shows.**
 
