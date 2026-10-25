@@ -15,6 +15,7 @@ import json
 import os
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from .support import ModelText
@@ -63,22 +64,55 @@ class AdapterError(RuntimeError):
     """The endpoint could not be called, or answered with an HTTP error."""
 
 
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def _checked_base_url(url: str, *, allow_insecure_loopback: bool) -> str:
+    """The endpoint the bearer key may be sent to, or an AdapterError. The URL is named in the
+    error only by its scheme and host, so a mistyped key pasted into it is never echoed."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = parts.hostname or ""
+        parts.port  # noqa: B018 - raises ValueError on a malformed port
+    except ValueError:
+        raise AdapterError("the model endpoint URL could not be parsed") from None
+    scheme = parts.scheme.lower()
+    if parts.username is not None or parts.password is not None:
+        raise AdapterError("the model endpoint URL must not carry a user name or password")
+    if not host:
+        raise AdapterError("the model endpoint URL has no host; use https://HOST/PATH")
+    if scheme == "https":
+        return url
+    if scheme == "http" and allow_insecure_loopback and host.lower() in _LOOPBACK_HOSTS:
+        return url
+    raise AdapterError(f"refused model endpoint {scheme or '(no scheme)'}://{host}: the API key is "
+                       "only sent over https (plain http is allowed only to a loopback address, "
+                       "and only with OpenAICompatible(allow_insecure_loopback=True))")
+
+
 class OpenAICompatible:
     """POST {base_url}/chat/completions with one user message; return the first choice's text.
 
     model      model name sent to the endpoint (default: $CLAIM_SEAL_MODEL)
-    base_url   default: $CLAIM_SEAL_BASE_URL, else https://api.openai.com/v1
+    base_url   default: $CLAIM_SEAL_BASE_URL, else https://api.openai.com/v1. Must be https
+               with a host and no user:password part; anything else is refused here, before
+               the key is ever read.
     api_key_env  name of the environment variable holding the key (default OPENAI_API_KEY)
+    allow_insecure_loopback  constructor-only switch for local testing: also accept
+               http://127.0.0.1, http://[::1] or http://localhost. No environment variable can
+               turn it on, and it never allows plain http to any other host.
 
     An HTTP 429 raises an AdapterError whose message contains "429", which the per-claim
     runner treats as a rate limit (fails closed, no retry).
     """
 
     def __init__(self, model: str | None = None, base_url: str | None = None,
-                 api_key_env: str = "OPENAI_API_KEY", temperature: float = 0.0):
+                 api_key_env: str = "OPENAI_API_KEY", temperature: float = 0.0, *,
+                 allow_insecure_loopback: bool = False):
         self.model = model or os.environ.get("CLAIM_SEAL_MODEL") or ""
-        self.base_url = (base_url or os.environ.get("CLAIM_SEAL_BASE_URL")
-                         or "https://api.openai.com/v1").rstrip("/")
+        self.base_url = _checked_base_url(
+            (base_url or os.environ.get("CLAIM_SEAL_BASE_URL") or "https://api.openai.com/v1").rstrip("/"),
+            allow_insecure_loopback=allow_insecure_loopback is True)
         self.api_key_env = api_key_env
         self.temperature = temperature
         self.name = self.model or None

@@ -323,9 +323,14 @@ endpoint (the key is read from the environment at call time, never stored):
 
 ```
 export OPENAI_API_KEY=...                          # or pass api_key_env= in code
-export CLAIM_SEAL_BASE_URL=https://api.openai.com/v1   # optional; any compatible endpoint
+export CLAIM_SEAL_BASE_URL=https://api.openai.com/v1   # optional; any compatible https endpoint
 python3 -m claim_seal check examples/brief.json examples/sources.json --judge openai:MODEL_NAME
 ```
+
+The endpoint must be `https://` with a host and no `user:password@` part; anything else is
+refused when the adapter is built, before the key is read. Plain `http://` is accepted only to a
+loopback address (`127.0.0.1`, `::1`, `localhost`) and only when code passes
+`OpenAICompatible(allow_insecure_loopback=True)`; no environment variable can turn that on.
 
 A real model will not reproduce the recorded answers word for word.
 
@@ -357,6 +362,16 @@ check is new; `judge()` returns an annotated copy
 instead of editing its input; source digests are taken when sources are handed in rather than
 by an HTTP fetcher. The composer's title-lineage checks for specific feed formats, its service
 checkpoints and its per-call usage telemetry are not included.
+
+## What changed after the security review
+
+Before the first public release, an independent security review found five high and four medium
+problems. Each fix below has a test that failed before it (`tests/test_security_findings.py`).
+How to report a new one: [SECURITY.md](SECURITY.md).
+
+- **The model endpoint must be https.** `OpenAICompatible` refuses an `http://` (or any other
+  non-https) base URL, a URL with no host, and a URL carrying a user name or password, before the
+  key is read. Loopback http needs `allow_insecure_loopback=True` in code.
 
 ## Related work
 
