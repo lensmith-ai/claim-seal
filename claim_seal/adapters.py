@@ -18,6 +18,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from .prompts import SOURCE_DATA_RULE, strip_source_data
 from .support import ModelText
 
 _CLAIM_BLOCK = re.compile(r"^CLAIM (\d+):\n  (.*)$", re.M)
@@ -49,11 +50,13 @@ class ReplayJudge:
 
     def __call__(self, prompt: str, timeout: float | None = None) -> ModelText:
         self.prompts.append(prompt)
-        if prompt.startswith("Judge only the delimited fetched excerpts."):
-            claim = prompt.split("CLAIM:\n", 1)[-1].split("\n", 1)[0]
+        # Only the instruction part is read: a "CLAIM n:" line inside source data is source text.
+        instructions = strip_source_data(prompt)
+        if "Judge only the delimited fetched excerpts." in instructions:
+            claim = instructions.split("CLAIM:\n", 1)[-1].split("\n", 1)[0]
             return ModelText(json.dumps(self.completion_answers.get(claim) or {}), model=self.name)
         verdicts = []
-        for number, text in _CLAIM_BLOCK.findall(prompt):
+        for number, text in _CLAIM_BLOCK.findall(instructions):
             entry = self.answers.get(text)
             if isinstance(entry, dict):
                 verdicts.append(dict(entry, claim=int(number)))
@@ -121,19 +124,27 @@ class OpenAICompatible:
                http://127.0.0.1, http://[::1] or http://localhost. No environment variable can
                turn it on, and it never allows plain http to any other host.
 
+    send_rule  also send claim_seal.prompts.SOURCE_DATA_RULE as a system message (default
+               True; every prompt already opens with it, this adds the instruction channel)
+    json_mode  ask for a JSON object reply (response_format json_object; default True). An
+               endpoint that rejects it answers HTTP 400: pass json_mode=False.
+
     An HTTP 429 raises an AdapterError whose message contains "429", which the per-claim
     runner treats as a rate limit (fails closed, no retry).
     """
 
     def __init__(self, model: str | None = None, base_url: str | None = None,
                  api_key_env: str = "OPENAI_API_KEY", temperature: float = 0.0, *,
-                 allow_insecure_loopback: bool = False):
+                 allow_insecure_loopback: bool = False, send_rule: bool = True,
+                 json_mode: bool = True):
         self.model = model or os.environ.get("CLAIM_SEAL_MODEL") or ""
         self.base_url = _checked_base_url(
             (base_url or os.environ.get("CLAIM_SEAL_BASE_URL") or "https://api.openai.com/v1").rstrip("/"),
             allow_insecure_loopback=allow_insecure_loopback is True)
         self.api_key_env = api_key_env
         self.temperature = temperature
+        self.send_rule = send_rule
+        self.json_mode = json_mode
         self.name = self.model or None
         if not self.model:
             raise AdapterError("no model name: pass model= or set CLAIM_SEAL_MODEL")
@@ -142,8 +153,12 @@ class OpenAICompatible:
         key = os.environ.get(self.api_key_env)
         if not key:
             raise AdapterError(f"no API key: set the {self.api_key_env} environment variable")
-        body = json.dumps({"model": self.model, "temperature": self.temperature,
-                           "messages": [{"role": "user", "content": prompt}]}).encode("utf-8")
+        messages = ([{"role": "system", "content": SOURCE_DATA_RULE.strip()}] if self.send_rule else [])
+        messages.append({"role": "user", "content": prompt})
+        payload = {"model": self.model, "temperature": self.temperature, "messages": messages}
+        if self.json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        body = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
             self.base_url + "/chat/completions", data=body, method="POST",
             headers={"Content-Type": "application/json"})
@@ -158,7 +173,9 @@ class OpenAICompatible:
             with _open(req, timeout or 180) as resp:
                 doc = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            raise AdapterError(f"HTTP {exc.code} from the model endpoint") from None
+            hint = (" (if the endpoint does not accept response_format, use "
+                    "OpenAICompatible(json_mode=False))" if exc.code == 400 and self.json_mode else "")
+            raise AdapterError(f"HTTP {exc.code} from the model endpoint{hint}") from None
         except urllib.error.URLError as exc:
             raise AdapterError(f"could not reach the model endpoint: {exc.reason}") from None
         try:
