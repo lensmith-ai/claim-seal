@@ -13,10 +13,13 @@ keyword arguments here; in the composer they were deployment flags.
                   (timeouts), and a total loss yields no spans at all.
 
 SOURCE TEXT IS DATA (added in this library after a security review; not in the composer). Every
-prompt opens with SOURCE_DATA_RULE, and every piece of source text sits in its own block between
-a "<<<LABEL BEGIN>>>" line and a "<<<LABEL END>>>" line. Inside a block, every "<<<" and ">>>" is
-replaced, so a source cannot close its block early or forge another one. OpenAICompatible also
-sends the rule as a system message. This lowers the odds that text in a source steers the judge;
+prompt opens with SOURCE_DATA_RULE, and every piece of source-controlled text (the source id, the
+item's title and text, the evidence window) sits in its own block between a "<<<LABEL BEGIN>>>"
+line and a "<<<LABEL END>>>" line. Inside a block, every "<<<" and ">>>" is replaced, so a source
+cannot close its block early or forge another one. Outside the blocks the prompt holds only this
+module's own words, generated numbers and labels, and the writer's claim and supporting sentences
+passed through instruction_text(), which keeps each on one line with no markers (so no text can
+open a "CLAIM n:" line of its own). OpenAICompatible also sends the rule as a system message. This lowers the odds that text in a source steers the judge;
 it cannot rule it out (see README, "What it does not do").
 """
 from __future__ import annotations
@@ -41,6 +44,15 @@ _DATA_BLOCK = re.compile(r"<<<([A-Z0-9 ]{1,60}) BEGIN>>>\n.*?\n<<<\1 END>>>", re
 def _defang(text: str) -> str:
     """No marker can be formed inside source data: every <<< and >>> is replaced."""
     return str(text).replace("<<<", "\u2039\u2039\u2039").replace(">>>", "\u203a\u203a\u203a")
+
+
+_LINE_BREAKS = re.compile("[\x00-\x1f\x7f\x85\u2028\u2029]+")
+
+
+def instruction_text(text) -> str:
+    """Caller text that has to sit OUTSIDE the data blocks (a claim, a supporting sentence): one
+    line, no control characters, no markers. ReplayJudge keys its answers the same way."""
+    return _LINE_BREAKS.sub(" ", _defang(text)).strip()
 
 
 def source_data_block(label: str, text: str) -> str:
@@ -81,9 +93,9 @@ def build_prompt(report: dict, *, citation_spans_enabled: bool = False,
 
         def _source(j, i, x, k=k, n=n):
             label = f"CLAIM {k} SOURCE {j + 1}"
-            head = (f"  SOURCE {j + 1} (citation_index {i}, {x['source']}):" if annotate
-                    else f"  SOURCE {j + 1} ({x['source']}):")
-            out = head + "\n" + source_data_block(label, x["text"])
+            # The source id is the caller's string: it goes INSIDE the block, never in the head.
+            head = (f"  SOURCE {j + 1} (citation_index {i}):" if annotate else f"  SOURCE {j + 1}:")
+            out = head + "\n" + source_data_block(label, f"source id: {x['source']}\n{x['text']}")
             window = (claim_evidence_candidates or {}).get((n, i)) if annotate else None
             if window:
                 out += ("\n    RESPONSE TEXT (quote support_span verbatim from HERE, not from the "
@@ -100,11 +112,12 @@ def build_prompt(report: dict, *, citation_spans_enabled: bool = False,
         supporting = ""
         if citation_spans_enabled:
             fields = (span_fields_by_claim or {}).get(n) or {}
-            lines = [f"    [{name}] {text}" for name, text in fields.items() if name != "insight"]
+            lines = [f"    [{name}] {instruction_text(text)}" for name, text in fields.items()
+                     if name != "insight"]
             if lines:
                 supporting = "\n  SUPPORTING SENTENCES (a span_quote may come from one of these, "
                 supporting += "and should where the source bears on it):\n" + "\n".join(lines)
-        blocks.append(f"CLAIM {len(checkable)}:\n  {c['claim']}{supporting}\n{srcs}")
+        blocks.append(f"CLAIM {len(checkable)}:\n  {instruction_text(c['claim'])}{supporting}\n{srcs}")
     # Per-SENTENCE relation: the judge already picks the sentence when it quotes span_quote; this
     # asks, in the same breath, how THAT sentence relates to THAT source (a sentence the source
     # states verbatim must not inherit a claim-level "goes further" label).
@@ -222,8 +235,9 @@ def completion_prompt(claim: dict, candidate: dict) -> str:
     """The optional evidence-completion pass: does one more item complete a partial claim?"""
     resolved = [cite for cite in claim["citations"]
                 if cite["resolution"] != "unresolved" and cite.get("text")]
-    prior = "\n".join(f"CITED SOURCE {i + 1} ({cite['source']}):\n"
-                      + source_data_block(f"CITED SOURCE {i + 1}", cite["text"])
+    prior = "\n".join(f"CITED SOURCE {i + 1}:\n"
+                      + source_data_block(f"CITED SOURCE {i + 1}",
+                                          f"source id: {cite['source']}\n{cite['text']}")
                       for i, cite in enumerate(resolved))
     return (
         SOURCE_DATA_RULE
@@ -232,6 +246,7 @@ def completion_prompt(claim: dict, candidate: dict) -> str:
         "a material element absent from the cited set. Do not use outside knowledge.\n\n"
         "Return ONLY JSON with exactly: combined_verdict ('completed' or 'not_completed'), "
         "candidate_adds_material_support (boolean), why (factual, <=200 characters).\n\n"
-        f"CLAIM:\n{claim['claim']}\n\n{prior}\n\nCANDIDATE ({candidate['source']}):\n"
-        + source_data_block("CANDIDATE", candidate["text"][:MAX_SRC_CHARS])
+        f"CLAIM:\n{instruction_text(claim['claim'])}\n\n{prior}\n\nCANDIDATE:\n"
+        + source_data_block("CANDIDATE", f"source id: {candidate['source']}\n"
+                            + candidate["text"][:MAX_SRC_CHARS])
     )

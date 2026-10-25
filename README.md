@@ -431,15 +431,21 @@ How to report a new one: [SECURITY.md](SECURITY.md).
 - **Source text is wrapped as data in every prompt.** Before, source text sat in the judge's one
   instruction message with nothing marking where it began or ended. Now every judge and
   completion prompt opens with a rule (`claim_seal.prompts.SOURCE_DATA_RULE`) that source text is
-  data and must never be followed; each source text and evidence window sits in its own
-  `<<<LABEL BEGIN>>>` / `<<<LABEL END>>>` block, with every `<<<` and `>>>` inside it replaced
-  (by `‹‹‹` and `›››`) so a source cannot close its block or forge one; `OpenAICompatible` also
+  data and must never be followed; everything a source controls (its id, the item's title and
+  text, the evidence window) sits in its own `<<<LABEL BEGIN>>>` / `<<<LABEL END>>>` block, with
+  every `<<<` and `>>>` inside it replaced (by `‹‹‹` and `›››`) so a source cannot close its block
+  or forge one. Outside the blocks there are only the library's own words and generated numbers,
+  plus the writer's claim and supporting sentences, each flattened to one line with markers
+  replaced, so no text can start a `CLAIM n:` line of its own. On the whole-brief path a claim
+  number answered twice is rejected and that claim is `unchecked` (it used to take the last
+  answer), as the per-claim path already did; `OpenAICompatible` also
   sends the rule as a system message and asks for a JSON object reply (`json_mode=False` turns
   that off for an endpoint that rejects it); `ReplayJudge` reads only the instruction part, so a
   `CLAIM n:` line inside a source is not a claim. The prompts therefore differ from the
   composer's, and a quote that crosses a replaced `<<<` or `>>>` is not located (it fails
   closed). Injection test cases: role markers, fake JSON, override commands, requests to copy
-  another source, forged end markers, fake claim blocks. The limit is in
+  another source, forged end markers, fake claim blocks, through the source text, body, title,
+  id, label and URL, and through the writer's own sentences. The limit is in
   [What it does not do](#what-it-does-not-do).
 - **Inputs and replies have ceilings.** A 10,000-deep JSON array in a brief used to crash the CLI
   with a `RecursionError` traceback; a source of any size was accepted; a model reply was read

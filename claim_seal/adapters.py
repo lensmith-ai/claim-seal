@@ -19,7 +19,7 @@ import urllib.parse
 import urllib.request
 
 from . import limits
-from .prompts import SOURCE_DATA_RULE, strip_source_data
+from .prompts import SOURCE_DATA_RULE, instruction_text, strip_source_data
 from .support import ModelText
 
 _CLAIM_BLOCK = re.compile(r"^CLAIM (\d+):\n  (.*)$", re.M)
@@ -41,6 +41,9 @@ class ReplayJudge:
     def __init__(self, answers: dict, completion_answers: dict | None = None):
         self.answers = dict(answers or {})
         self.completion_answers = dict(completion_answers or {})
+        # The prompt carries each claim through instruction_text(); look answers up the same way.
+        self._answers = {instruction_text(k): v for k, v in self.answers.items()}
+        self._completion = {instruction_text(k): v for k, v in self.completion_answers.items()}
         self.prompts: list[str] = []
 
     @classmethod
@@ -54,10 +57,10 @@ class ReplayJudge:
         instructions = strip_source_data(prompt)
         if "Judge only the delimited fetched excerpts." in instructions:
             claim = instructions.split("CLAIM:\n", 1)[-1].split("\n", 1)[0]
-            return ModelText(json.dumps(self.completion_answers.get(claim) or {}), model=self.name)
+            return ModelText(json.dumps(self._completion.get(claim) or {}), model=self.name)
         verdicts = []
         for number, text in _CLAIM_BLOCK.findall(instructions):
-            entry = self.answers.get(text)
+            entry = self._answers.get(text)
             if isinstance(entry, dict):
                 verdicts.append(dict(entry, claim=int(number)))
         return ModelText(json.dumps({"verdicts": verdicts}), model=self.name)

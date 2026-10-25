@@ -382,12 +382,22 @@ def verify(brief: dict, sources: dict, receipts: dict, model, *,
                     "wall_s": round(time.monotonic() - started, 3), "attempts": attempts})
         obj = extract_json(out) if out else None
         if isinstance(obj, dict) and isinstance(obj.get("verdicts"), list):
+            numbered = []
             for v in obj["verdicts"]:
                 if not isinstance(v, dict):
                     continue
                 try:
-                    n = int(v.get("claim"))
+                    numbered.append((int(v.get("claim")), v))
                 except (TypeError, ValueError):
+                    continue
+            # A claim number answered twice is rejected, never "last one wins": the same rule as
+            # merge_shard_verdicts on the per-claim path. That claim stays unchecked.
+            seen_numbers = [n for n, _ in numbered]
+            duplicates = sorted({n for n in seen_numbers if seen_numbers.count(n) > 1})
+            if duplicates:
+                rec["rejected"] = [{"claim": n, "reason": "duplicate-claim-id"} for n in duplicates]
+            for n, v in numbered:
+                if n in duplicates:
                     continue
                 if 1 <= n <= len(checkable):
                     verdicts[checkable[n - 1]] = {
