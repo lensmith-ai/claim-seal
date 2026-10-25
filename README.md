@@ -34,8 +34,8 @@ listed below.
   A claim faithfully supported by a wrong source passes.
 - **The support judge is a model and can be wrong.** Pass 2 is one model's reading. The library
   keeps that reading honest (a quote must be found exactly, a "supported" with no located
-  passage is not recorded as support, a model failure is "unchecked", never a pass), but it
-  cannot make the reading correct.
+  passage is not reported as support anywhere, a model failure is "unchecked", never a pass), but
+  it cannot make the reading correct.
 - **The seal is not a signature.** It is an unkeyed digest chain: tamper-evident only alongside
   version history (see [The seal](#the-seal-and-its-limits)).
 
@@ -71,10 +71,17 @@ Then everything the model said is checked by code, fail-closed:
 - An evidence passage must be found in the captured, digest-pinned source document. An
   ambiguous quote may grow by up to 1,536 characters of context to become unique; otherwise it
   is refused rather than guessed.
-- A `supported` verdict with no located passage is recorded as `unresolved`, not supported. A
-  `partial` is never recorded as `unsupported`, unless the judge also named the relation
-  `contradicts` (see below). A missing or unreadable verdict is `unchecked` or `unknown`, never a
-  pass.
+- A `supported` verdict with no located passage is recorded as `unresolved`, not supported,
+  everywhere a result is read: the evidence row, the claim's verdict in the annotated brief, the
+  verdict counts, the overall status and `line_states()`. A claim is reported `supported` only when
+  its sealed evidence rows include one for that claim (same position, same claim-text digest) that
+  is `supported`, with `evidence: present` and located spans carrying their offsets and the
+  source document's digest. Otherwise the claim's verification carries
+  `verdict_override: {"rule": "support-not-located", "judge_verdict": "supported"}` and its `why`
+  begins "recorded unresolved: the judge said supported". One located citation is enough to carry
+  a claim with several. A `partial` is never recorded as `unsupported`, unless the judge also
+  named the relation `contradicts` (see below). A missing or unreadable verdict is `unchecked` or
+  `unknown`, never a pass.
 
 Claim verdicts: `supported`, `partial`, `unsupported`, `unresolved` (pass 1 found nothing),
 `unchecked` (no usable verdict). The brief's overall status is one of `ok`, `unsupported`,
@@ -145,7 +152,9 @@ not as a printed line, not in the sealed record, not as a claim verdict. Because
 the same reader, `"contradicts "`, `"Contradicts"` and every synonym in the table count.
 
 With the evidence pass on (the default) the prompt asks the judge for the claim-level relation.
-With it off (`evidence=False`, `--no-evidence`) the prompt does not ask, so the override fires
+With it off (`evidence=False`, `--no-evidence`) no passage is located, so **no claim can come out
+`supported`**: a judge's `supported` is recorded `unresolved` (rule `support-not-located`). Also with
+it off, the prompt does not ask for the claim-level relation, so the override fires
 only when a judge volunteers the relation anyway; the library keeps that relation on both paths
 so a volunteered `contradicts` is never ignored. Sentence-level relations are asked for whenever
 spans are on.
@@ -377,6 +386,13 @@ How to report a new one: [SECURITY.md](SECURITY.md).
 - **Redirects are refused.** The adapter used to follow a redirect and send the `Authorization`
   header to the new address, even another host. It now refuses every redirect (same host
   included), and the key is set as a header urllib never copies onto a redirected request.
+- **Public support needs a located passage.** Before, the sealed evidence row already said
+  `unresolved` for a `supported` verdict with no located passage, but the claim's verdict in
+  `result["brief"]`, the counts, `result["status"]` and `line_states()` still said supported (or
+  `ok`). Now all of them say `unresolved`, with `verdict_override` rule `support-not-located`, so
+  a page can no longer show model-only support. With `--no-evidence` no claim is `supported`.
+  `verify()` (the lower-level step under `judge()`) applies the same gate; `gate_support=False`
+  returns the raw model reading, for tests of the parser only.
 
 ## Related work
 

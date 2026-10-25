@@ -295,7 +295,8 @@ def _extend_ambiguous_span(normalized: str, proposed: str) -> tuple[int, int, di
     return None
 
 
-def _claim_ref(kind: str, item_index: int, analysis_index, claim: dict) -> dict:
+def claim_ref(kind: str, item_index: int, analysis_index, claim: dict) -> dict:
+    """A claim's identity on its evidence rows: its position and a digest of its text."""
     field = next((name for name in ("text", "insight", "headline") if isinstance(claim.get(name), str)), "text")
     text = claim.get(field) if isinstance(claim.get(field), str) else ""
     return {"kind": kind, "item_index": item_index, "analysis_index": analysis_index,
@@ -323,7 +324,7 @@ def build_claim_evidence(brief: dict, sources: dict, model_verdicts: dict | None
         outcomes.append(outcome)
 
     for claim_n, (kind, item_index, analysis_index, claim) in enumerate(claim_units(brief)):
-        ref = _claim_ref(kind, item_index, analysis_index, claim)
+        ref = claim_ref(kind, item_index, analysis_index, claim)
         verdict = (model_verdicts or {}).get(claim_n) or {}
         for citation_index, citation in enumerate(claim.get("sources") or []):
             citation = citation if isinstance(citation, dict) else {}

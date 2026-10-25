@@ -26,7 +26,8 @@ import time
 
 from .attribution import attribution_checks
 from .completion import complete_partials
-from .evidence import build_claim_evidence, capture_sources, evidence_candidates, source_lineage
+from .evidence import (build_claim_evidence, capture_sources, claim_ref, evidence_candidates,
+                       source_lineage)
 from .prompts import build_claim_prompt, build_prompt
 from .relations import SPAN_RELATIONS, read_relation
 from .resolve import (CITATION_ROW_FIELDS, TEXT_FIELDS, load_sources, resolve, shape_brief,
@@ -238,6 +239,42 @@ def _verify_sharded(report: dict, checkable: list, model, *, citation_spans_enab
             "pool_size": pool_size, "deadline_s": deadline_s}
 
 
+# ---- the public support gate ------------------------------------------------------------------
+SUPPORT_GATE_RULE = "support-not-located"
+
+
+def located_claims(report: dict, brief: dict, record) -> set:
+    """Report claim numbers that have digest-bound, located support in the claim-evidence record:
+    a row for THAT claim (same position, same claim-text digest) whose support_state is
+    supported, whose evidence is present, and whose every evidence span carries its offsets, its
+    own digest and the digest of the source document it was located in."""
+    rows = (record or {}).get("outcomes") if isinstance(record, dict) else None
+    if not isinstance(rows, list):
+        return set()
+    supported: dict = {}
+    for row in rows:
+        spans = row.get("evidence_spans") if isinstance(row, dict) else None
+        if (not isinstance(row, dict) or row.get("support_state") != "supported"
+                or row.get("evidence") != "present" or not isinstance(spans, list) or not spans):
+            continue
+        if not all(isinstance(s, dict) and isinstance(s.get("start"), int) and isinstance(s.get("end"), int)
+                   and isinstance(s.get("sha256"), str) and isinstance(s.get("response_sha256"), str)
+                   for s in spans):
+            continue
+        ref = row.get("claim_ref") or {}
+        supported.setdefault((ref.get("kind"), ref.get("item_index"), ref.get("analysis_index")),
+                             []).append(ref)
+    found = set()
+    for n, c in enumerate(report["claims"]):
+        target = target_for_claim(brief, c)
+        if not isinstance(target, dict):
+            continue
+        expected = claim_ref(c["kind"], c["index"], c["analysis_index"], target)
+        if expected in supported.get((c["kind"], c["index"], c["analysis_index"]), []):
+            found.add(n)
+    return found
+
+
 # ---- the verification step ---------------------------------------------------------------------
 def verify(brief: dict, sources: dict, receipts: dict, model, *,
            citation_spans_enabled: bool = True, sharded: bool = True,
@@ -246,10 +283,18 @@ def verify(brief: dict, sources: dict, receipts: dict, model, *,
            completion: bool = False, completion_cap: int = 6,
            pool_size: int = VERIFY_POOL_DEFAULT,
            claim_deadline_s: float = VERIFY_CLAIM_DEADLINE_S,
-           text_fields: tuple = TEXT_FIELDS) -> dict:
+           text_fields: tuple = TEXT_FIELDS, gate_support: bool = True) -> dict:
     """Run both passes. MUTATES `brief`: shape_brief fixes it in place (a string detail becomes
     [detail]), every claim gains a `verification` block, and the record
     is written to receipts["verification"] and returned. Most callers want judge() instead.
+
+    THE SUPPORT GATE (gate_support=True, the default and what judge() uses): a claim is recorded
+    "supported" only when the claim-evidence record returned by `claim_evidence_sink` holds a
+    supported, located, digest-bound row for it (located_claims). Otherwise the judge's
+    "supported" is recorded "unresolved" with verdict_override {"rule": "support-not-located",
+    "judge_verdict": "supported"}; with no sink there is no record, so no claim is supported.
+    gate_support=False returns the model's raw reading, ungated: a "supported" there is the
+    model's word only and must never be shown to a reader as support.
 
     A model exception on the whole-brief path propagates (the caller owns that failure); on the
     per-claim path it is classified per claim.
@@ -345,8 +390,8 @@ def verify(brief: dict, sources: dict, receipts: dict, model, *,
             if citation_spans_enabled and span_status is None:
                 span_status = "model-output-invalid"
 
-    if claim_evidence_sink is not None:
-        claim_evidence_sink(verdicts)
+    evidence_record = claim_evidence_sink(verdicts) if claim_evidence_sink is not None else None
+    located = located_claims(report, brief, evidence_record) if gate_support else set()
     counts = {"supported": 0, "partial": 0, "unsupported": 0, "unresolved": 0, "unchecked": 0}
     for n, c in enumerate(report["claims"]):
         cites = c["citations"]
@@ -384,6 +429,16 @@ def verify(brief: dict, sources: dict, receipts: dict, model, *,
                 v["verdict"] = "unsupported"
                 v["why"] = (f"recorded unsupported: the judge named the relation contradicts "
                             f"(its verdict word was {v['verdict_override']['judge_verdict']}). "
+                            + v["why"])[:400]
+            elif gate_support and v["verdict"] == "supported" and n not in located:
+                # Public support needs a located passage: the judge's word alone is a model
+                # reading, and the sealed row for this claim already says it is not support.
+                v["verdict_override"] = {"rule": SUPPORT_GATE_RULE, "judge_verdict": "supported"}
+                v["verdict"] = "unresolved"
+                v["why"] = (("recorded unresolved: the judge said supported, but "
+                             + ("no passage it quoted was located in the digest-pinned source. "
+                                if evidence_record is not None else
+                                "the evidence pass was off, so no passage could be located. "))
                             + v["why"])[:400]
         else:
             v = {"verdict": "unchecked",
@@ -493,6 +548,7 @@ def judge(brief: dict, sources: dict, model, *, spans: bool = True, sharded: boo
 
     def sink(verdicts):
         holder["claim_evidence"] = build_claim_evidence(doc, captured, verdicts)
+        return holder["claim_evidence"]
 
     rec = verify(doc, captured, receipts, model,
                  citation_spans_enabled=spans, sharded=sharded, local_placement=local_placement,

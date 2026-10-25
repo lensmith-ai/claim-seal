@@ -149,7 +149,10 @@ def run(detail, span_quote, span_relation, verdict="supported"):
                       "sources": [{"id": "press", "ref": "Bridge reopens"}]}]}
     reply = {"verdicts": [{"claim": 1, "verdict": verdict, "why": "w", "relation": "says",
                            "citation_spans": [{"citation_index": 0, "span_quote": span_quote,
-                                               "span_relation": span_relation}]}]}
+                                               "span_relation": span_relation}],
+                           # a located passage, so a supported claim stays publicly supported
+                           "evidence_spans": [{"citation_index": 0,
+                                               "support_span": "The harbour bridge reopened"}]}]}
     return judge(doc, SOURCES, fixed(reply), local_placement=False)
 
 

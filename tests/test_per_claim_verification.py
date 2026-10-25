@@ -24,6 +24,7 @@ from claim_seal.resolve import resolve
 def run_sharded(model, **kwargs):
     brief, sources = corpus()
     receipts: dict = {}
+    kwargs.setdefault("gate_support", False)  # the raw model reading: the support gate has its own tests
     rec = verify(brief, sources, receipts, model, citation_spans_enabled=kwargs.pop("spans", False),
                  sharded=True, **kwargs)
     return brief, rec
@@ -44,7 +45,7 @@ class Arm1ContractPreservation(unittest.TestCase):
     def test_whole_brief_path_matches_the_frozen_baseline(self):
         brief, sources = corpus()
         rec = verify(brief, sources, {}, fixed(FROZEN_WHOLE_BRIEF_REPLY),
-                     citation_spans_enabled=False, sharded=False)
+                     citation_spans_enabled=False, sharded=False, gate_support=False)
         self.assertEqual(surface(brief, rec), BASELINE)
 
     def test_per_claim_path_matches_the_whole_brief_path(self):
@@ -55,7 +56,7 @@ class Arm1ContractPreservation(unittest.TestCase):
         self.assertEqual(len(rec["sharding"]["shards"]), 4)
         whole, sources = corpus()
         verify(whole, sources, {}, fixed(FROZEN_WHOLE_BRIEF_REPLY), citation_spans_enabled=False,
-               sharded=False)
+               sharded=False, gate_support=False)
         self.assertEqual([i["verification"] for i in brief["items"]],
                          [i["verification"] for i in whole["items"]])
 

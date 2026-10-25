@@ -6,6 +6,7 @@ the only key is a planted test value.
 """
 from __future__ import annotations
 
+import copy
 import http.server
 import json
 import os
@@ -13,8 +14,9 @@ import threading
 import unittest
 from unittest.mock import patch
 
-import helpers  # noqa: F401 - puts the repository root on sys.path
+import helpers  # puts the repository root on sys.path
 
+from claim_seal import judge, line_states, verify_seal
 from claim_seal.adapters import AdapterError, OpenAICompatible
 
 TEST_KEY = "TEST_ONLY_KEY"
@@ -184,6 +186,87 @@ class Finding2NoAuthenticatedRedirects(unittest.TestCase):
         follow = urllib.request.HTTPRedirectHandler().redirect_request(
             req, None, 302, "Found", {}, "http://example.test/steal")
         self.assertNotIn("Authorization", dict(follow.header_items()))
+
+
+ONE_CLAIM = {"items": [{"insight": "The relay clears ten thousand messages an hour.",
+                        "sources": [{"id": "alpha", "ref": "Queue rewrite ships"}]}]}
+ONE_SOURCE = {"alpha": {"label": "Alpha Weekly", "items": [
+    {"title": "Queue rewrite ships",
+     "text": "The relay now clears ten thousand messages an hour after the queue rewrite."}]}}
+LOCATED = "clears ten thousand messages an hour"
+
+
+def _one_claim_judge(**verdict):
+    entry = {"claim": 1, "verdict": "supported", "why": "the source states the figure", **verdict}
+    return helpers.fixed({"verdicts": [entry]})
+
+
+class Finding3PublicSupportNeedsALocatedPassage(unittest.TestCase):
+    """HIGH 3: a model-only "supported" reached result["status"], the annotated brief and
+    line_states() while the sealed row said unresolved."""
+
+    def test_the_review_probe_supported_with_no_evidence_spans_is_not_public_support(self):
+        result = judge(copy.deepcopy(ONE_CLAIM), copy.deepcopy(ONE_SOURCE), _one_claim_judge())
+        row = result["claim_evidence"]["outcomes"][0]
+        self.assertEqual((row["support_state"], row["state_reason"]),
+                         ("unresolved", "EVIDENCE-SPAN-NOT-PROPOSED"))
+        v = result["brief"]["items"][0]["verification"]
+        self.assertEqual(v["verdict"], "unresolved")
+        self.assertEqual(v["verdict_override"], {"rule": "support-not-located", "judge_verdict": "supported"})
+        self.assertNotEqual(result["status"], "ok")
+        self.assertEqual(result["verification"]["verdicts"]["supported"], 0)
+        states = line_states(result["brief"])
+        self.assertEqual(states["lines"], [])
+        self.assertTrue(verify_seal(result["claim_evidence"]))
+
+    def test_a_proposed_passage_that_is_not_in_the_source_is_not_support(self):
+        model = _one_claim_judge(evidence_spans=[{"citation_index": 0,
+                                                  "support_span": "clears a million messages"}])
+        result = judge(copy.deepcopy(ONE_CLAIM), copy.deepcopy(ONE_SOURCE), model)
+        self.assertEqual(result["claim_evidence"]["outcomes"][0]["state_reason"], "EVIDENCE-SPAN-NOT-LOCATED")
+        self.assertEqual(result["brief"]["items"][0]["verification"]["verdict"], "unresolved")
+        self.assertNotEqual(result["status"], "ok")
+
+    def test_a_located_digest_bound_passage_keeps_the_verdict_supported(self):
+        for sharded in (True, False):
+            with self.subTest(sharded=sharded):
+                model = _one_claim_judge(evidence_spans=[{"citation_index": 0, "support_span": LOCATED}])
+                result = judge(copy.deepcopy(ONE_CLAIM), copy.deepcopy(ONE_SOURCE), model, sharded=sharded)
+                row = result["claim_evidence"]["outcomes"][0]
+                self.assertEqual((row["support_state"], row["evidence"]), ("supported", "present"))
+                self.assertTrue(row["evidence_spans"][0]["response_sha256"])
+                v = result["brief"]["items"][0]["verification"]
+                self.assertEqual(v["verdict"], "supported")
+                self.assertNotIn("verdict_override", v)
+                self.assertEqual(result["status"], "ok")
+
+    def test_one_located_citation_of_two_carries_the_claim(self):
+        brief = copy.deepcopy(ONE_CLAIM)
+        brief["items"][0]["sources"].append({"id": "alpha", "ref": "No such title anywhere"})
+        model = _one_claim_judge(evidence_spans=[{"citation_index": 0, "support_span": LOCATED}])
+        result = judge(brief, copy.deepcopy(ONE_SOURCE), model)
+        self.assertEqual(result["brief"]["items"][0]["verification"]["verdict"], "supported")
+
+    def test_with_the_evidence_pass_off_nothing_can_be_located_so_nothing_is_public_support(self):
+        result = judge(copy.deepcopy(ONE_CLAIM), copy.deepcopy(ONE_SOURCE), _one_claim_judge(),
+                       evidence=False)
+        v = result["brief"]["items"][0]["verification"]
+        self.assertEqual(v["verdict"], "unresolved")
+        self.assertEqual(v["verdict_override"]["rule"], "support-not-located")
+        self.assertIn("evidence pass", v["why"])
+        self.assertNotEqual(result["status"], "ok")
+
+    def test_the_whole_corpus_agrees_with_its_sealed_rows(self):
+        """End to end over the shared corpus: every public supported claim has a supported,
+        located, digest-bound row, and every claim without one is not public support."""
+        brief, sources = helpers.corpus()
+        result = judge(brief, sources, helpers.per_claim_model()[0])
+        rows = result["claim_evidence"]["outcomes"]
+        for item_index, item in enumerate(result["brief"]["items"]):
+            located = [r for r in rows if r["claim_ref"]["item_index"] == item_index
+                       and r["claim_ref"]["kind"] == "item" and r["support_state"] == "supported"
+                       and r["evidence"] == "present" and r["evidence_spans"]]
+            self.assertEqual(item["verification"]["verdict"] == "supported", bool(located), item_index)
 
 
 if __name__ == "__main__":

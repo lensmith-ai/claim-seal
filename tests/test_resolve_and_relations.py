@@ -157,7 +157,10 @@ class SentenceRelationIntakeTests(unittest.TestCase):
     def run_word(self, word, verdict="supported"):
         reply = {"verdicts": [{"claim": 1, "verdict": verdict, "why": "w", "relation": "says",
                                "citation_spans": [{"citation_index": 0, "span_quote": "Weekend crossings will double",
-                                                   "span_relation": word}]}]}
+                                                   "span_relation": word}],
+                               # a located passage, so a supported claim stays publicly supported
+                               "evidence_spans": [{"citation_index": 0,
+                                                   "support_span": "The harbour bridge reopened"}]}]}
         result = judge(self.DOC, SOURCES, fixed(reply), local_placement=False)
         span = result["brief"]["items"][0]["verification"]["citations"][0]["span"]
         return span, line_states(result["brief"])
@@ -316,7 +319,8 @@ class CitationRowsAreCodeBuilt(unittest.TestCase):
             {"id": "feed", "ref": "Alpha"}, {"id": "feed", "ref": "Beta"}]}]}
         src = {"feed": [{"title": "Alpha", "text": "The Rocket launch proves Alpha works."},
                         {"title": "Beta", "text": "Independent confirmation."}]}
-        verify(doc, src, {}, fixed(reply), citation_spans_enabled=False, sharded=False)
+        verify(doc, src, {}, fixed(reply), citation_spans_enabled=False, sharded=False,
+               gate_support=False)  # the raw model reading: the support gate has its own tests
         return doc
 
     def test_a_poisoned_citations_array_is_discarded_and_the_verdict_still_lands(self):
@@ -339,7 +343,7 @@ class CitationRowsAreCodeBuilt(unittest.TestCase):
     def test_source_ordinals_in_why_become_source_labels(self):
         doc = {"items": [{"insight": "x", "sources": [{"id": "press", "ref": "Ferry timetable"}]}]}
         verify(doc, SOURCES, {}, fixed({"verdicts": [{"claim": 1, "verdict": "supported", "why": "Source 1 says so"}]}),
-               citation_spans_enabled=False, sharded=False)
+               citation_spans_enabled=False, sharded=False, gate_support=False)
         self.assertEqual(doc["items"][0]["verification"]["why"], "Press says so")
 
 
