@@ -1,5 +1,14 @@
 # claim-seal
 
+<p align="center"><img src="docs/readme/how-it-works.png" width="860" alt="Drawing: how claim-seal works, as six stations on one bench. 1 Text + sources: writing whose claims cite sources by title, plus the sources, each fingerprinted with SHA-256. 2 Pass 1, find: plain code, no model; each cited title must match a source you gave, otherwise unresolved. 3 Pass 2, support: one model call per claim, supported, partial or unsupported; a quote is kept only if found exactly. 4 Each sentence: marked against each source as says what it says, goes further, contradicts, or unrated. 5 The seal: one row per claim per citation, chained by hash, so editing a row fails the check. 6 Not sealed: claim verdicts and reasons, sentence labels, overclaim flags, rule ids."></p>
+
+> **AI;DR (AI, didn't read)**
+> Claude wrote this code and this README. I haven't read either, and I can't explain or test it line by line myself.
+> What I have done: I use the checker this was extracted from in my own briefing tool. I routinely click through to the cited sources by hand, to see that what a claim says is really in the source, and that when a claim goes further, the going further is real. That's often the point, since claims built on plausible implication are the ones people follow. Everything I've checked has held up.
+> claim-seal itself is the extracted version. 230 automated tests pass, and an independent AI reviewer compared this README against the code before release. Treat it as a working experiment, and open an issue if something's off. (Arya)
+
+**Where it stands (2026-10-25).** claim-seal itself does not run in production yet. Its parent, the checker inside my briefing tool, does. On one recorded brief, claim-seal and that checker gave the same results: 4 of 4 claim verdicts and 10 of 10 evidence windows. Running claim-seal every day, beside that checker and on a second daily brief, is built and in review. This section will report what it finds.
+
 Check each claim in a piece of writing against the sources it cites. Record, sentence by
 sentence, whether the writing says what a source says, goes further than it, or contradicts it
 (the "goes further" check). Seal the claim-evidence rows (per claim and citation: the outcome, where each

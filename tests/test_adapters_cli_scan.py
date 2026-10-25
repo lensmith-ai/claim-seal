@@ -253,6 +253,21 @@ class PrivateStringScanTests(unittest.TestCase):
                         "key = 'sk-test-not-real'\n")
             self.assertEqual(scan_private.scan(tmp)[0], [])
 
+    def test_a_binary_passes_only_when_listed_with_its_exact_sha256(self):
+        png = b"\x89PNG\r\n\x1a\n" + bytes(range(256))
+        digest = __import__("hashlib").sha256(png).hexdigest()
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "docs"))
+            with open(os.path.join(tmp, "docs", "fig.png"), "wb") as h:
+                h.write(png)
+            unlisted, _ = scan_private.scan(tmp)
+            self.assertEqual([(h[0], h[2]) for h in unlisted], [("docs/fig.png", "unscannable file")])
+            with patch.dict(scan_private.REVIEWED_BINARIES, {"docs/fig.png": digest}, clear=True):
+                self.assertEqual(scan_private.scan(tmp)[0], [])
+            with patch.dict(scan_private.REVIEWED_BINARIES, {"docs/fig.png": "0" * 64}, clear=True):
+                changed, _ = scan_private.scan(tmp)
+                self.assertEqual([(h[0], h[2]) for h in changed], [("docs/fig.png", "reviewed binary changed")])
+
     def test_an_extra_denylist_file_adds_patterns_with_per_file_allowances(self):
         with tempfile.TemporaryDirectory() as tmp:
             deny = os.path.join(tmp, "deny.txt")

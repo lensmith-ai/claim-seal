@@ -19,12 +19,18 @@ Skips .git, .venv and caches; a file it cannot read as UTF-8 text is itself a hi
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import subprocess
 import sys
 
 SKIP_DIRS = {".git", ".venv", "__pycache__", ".mypy_cache", ".pytest_cache"}
+# Binary files this scan cannot read as text. Each was reviewed by eye before release and is pinned
+# by its exact sha256: any change to the bytes, or any binary not listed here, fails the scan.
+REVIEWED_BINARIES = {
+    "docs/readme/how-it-works.png": "727e245f6d902403c033f7f5aece5e9d678bd0655fc76f32110d8a51aff652a6",
+}
 DENYLIST_ENV = "CLAIM_SEAL_DENYLIST"
 
 # Environment variables this project reads or documents. Any other name read from or exported
@@ -93,8 +99,16 @@ def scan(root: str, extra=()) -> tuple[list[tuple[str, int, str, str]], int]:
                 with open(path, encoding="utf-8") as handle:
                     lines = handle.read().splitlines()
             except (UnicodeDecodeError, OSError) as exc:
-                # Fail closed: a file this scan cannot read is a file it cannot vouch for.
-                hits.append((rel, 0, "unscannable file", type(exc).__name__))
+                # Fail closed: a file this scan cannot read is a file it cannot vouch for,
+                # unless it is a reviewed binary whose bytes are unchanged.
+                pinned = REVIEWED_BINARIES.get(rel.replace(os.sep, "/"))
+                if pinned is None:
+                    hits.append((rel, 0, "unscannable file", type(exc).__name__))
+                    continue
+                with open(path, "rb") as handle:
+                    actual = hashlib.sha256(handle.read()).hexdigest()
+                if actual != pinned:
+                    hits.append((rel, 0, "reviewed binary changed", actual[:12]))
                 continue
             scanned += 1
             for number, line in enumerate(lines, 1):
