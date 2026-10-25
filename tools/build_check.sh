@@ -11,6 +11,7 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 OUT=${1:-$WORK/dist}
 mkdir -p "$OUT"
+OUT=$(cd "$OUT" && pwd)
 PY=${PYTHON:-python3}
 
 "$PY" -m venv "$WORK/build-env"
