@@ -5,9 +5,9 @@
 > **AI;DR (AI, didn't read)**
 > Claude wrote this code and this README. I haven't read either, and I can't explain or test it line by line myself.
 > What I have done: I use the checker this was extracted from in my own briefing tool. I routinely click through to the cited sources by hand, to see that what a claim says is really in the source, and that when a claim goes further, the going further is real. That's often the point, since claims built on plausible implication are the ones people follow. Everything I've checked has held up.
-> claim-seal itself is the extracted version. 283 automated tests pass, an independent AI reviewer compared this README against the code before release, and the problems an independent AI security review found are fixed, each with a test ([what changed](#what-changed-after-the-security-review)). Treat it as a working experiment, and open an issue if something's off ([how](CONTRIBUTING.md)). (Arya)
+> claim-seal was extracted from that checker. Since 2026-10-25 my briefing tool also runs claim-seal on every brief, beside the checker, and so far the two agree ([where it stands](#claim-seal)); from 2026-10-26 a second daily brief runs it too. 283 automated tests pass, an independent AI reviewer compared this README against the code before release, and the problems an independent AI security review found are fixed, each with a test ([what changed](#what-changed-after-the-security-review)). Treat it as a working experiment, and open an issue if something's off ([how](CONTRIBUTING.md)). (Arya)
 
-**Where it stands (2026-10-26).** Since the evening of 2026-10-25 (UTC), every brief my briefing tool writes is also run through claim-seal. It reuses the production judge's answers instead of asking a model again, and compares its results with the checker it was extracted from. That checker still decides what the reader sees. On the first 5 briefs the two agreed on 30 of 30 claim verdicts, 35 of 35 sentence relations and 56 of 56 evidence windows, and made the same seals. Because the answers are replayed, this compares two code paths on the same model answers, not two independent judgements. From 2026-10-26 a second daily brief runs it the same way; this section will report what it finds. Both run commit b5e994a, the version before the security fixes. The fixes in this repository change the judge prompts and when a verdict counts as supported, so the production copies move to the current version only after agreement is measured again.
+**Where it stands (2026-10-26).** Since the evening of 2026-10-25 (UTC), every brief my briefing tool writes is also run through claim-seal. It reuses the production judge's answers instead of asking a model again, and compares its results with the checker it was extracted from. That checker still decides what the reader sees. On the first 5 briefs the two agreed on 30 of 30 claim verdicts, 35 of 35 sentence relations and 56 of 56 evidence windows, and made the same seals. Because the answers are replayed, this compares two code paths on the same model answers, not two independent judgements. From 2026-10-26 a second daily brief runs it the same way; this section will report what it finds. Both run commit e0b352c, the version before the security fixes. The fixes in this repository change the judge prompts and when a verdict counts as supported, so the production copies move to the current version only after agreement is measured again.
 
 **claim-seal checks whether each claim in a piece of writing is actually backed by the sources it cites, sentence by sentence, and seals the result so a later edit shows.**
 
@@ -388,11 +388,6 @@ python3 tools/scan_private.py --history                                       # 
 sh tools/ci.sh                       # both, plus the demo
 sh tools/build_check.sh              # build, clean install and demo of the wheel (needs network once)
 ```
-
-## Lenses
-
-`lenses/raised-eyebrow.txt` is one of the composer's writing lenses, published as an example. A
-lens shapes the writing, not the check; see `lenses/README.md`.
 
 ## What changed in extraction
 
