@@ -5,7 +5,7 @@
 > **AI;DR (AI, didn't read)**
 > Claude wrote this code and this README. I haven't read either, and I can't explain or test it line by line myself.
 > What I have done: I use the checker this was extracted from in my own briefing tool. I routinely click through to the cited sources by hand, to see that what a claim says is really in the source, and that when a claim goes further, the going further is real. That's often the point, since claims built on plausible implication are the ones people follow. Everything I've checked has held up.
-> claim-seal itself is the extracted version. 283 automated tests pass, an independent AI reviewer compared this README against the code before release, and the problems an independent AI security review found are fixed, each with a test ([what changed](#what-changed-after-the-security-review)). Treat it as a working experiment, and open an issue if something's off. (Arya)
+> claim-seal itself is the extracted version. 283 automated tests pass, an independent AI reviewer compared this README against the code before release, and the problems an independent AI security review found are fixed, each with a test ([what changed](#what-changed-after-the-security-review)). Treat it as a working experiment, and open an issue if something's off ([how](CONTRIBUTING.md)). (Arya)
 
 **Where it stands (2026-10-26).** Since the evening of 2026-10-25 (UTC), every brief my briefing tool writes is also run through claim-seal. It reuses the production judge's answers instead of asking a model again, and compares its results with the checker it was extracted from. That checker still decides what the reader sees. On the first 5 briefs the two agreed on 30 of 30 claim verdicts, 35 of 35 sentence relations and 56 of 56 evidence windows, and made the same seals. Because the answers are replayed, this compares two code paths on the same model answers, not two independent judgements. From 2026-10-26 a second daily brief runs it the same way; this section will report what it finds. Both run commit b5e994a, the version before the security fixes. The fixes in this repository change the judge prompts and when a verdict counts as supported, so the production copies move to the current version only after agreement is measured again.
 
@@ -108,6 +108,8 @@ Claim verdicts: `supported`, `partial`, `unsupported`, `unresolved` (pass 1 foun
 
 ### Relation words
 
+**These words are the model's answer labels, not words searched for in the writing.** The model reads each sentence beside its source and judges the meaning (see [How it judges meaning](#claim-seal) at the top). The writing can say "conflicts", "disputes" or use no verb at all; that does not change the result. The lists below only matter when the model answers with a near word instead of a label.
+
 The judge is offered exactly the ten words above. When it answers with a near word anyway, one
 function, `read_relation`, reads it: trimmed, lower-cased, then sorted into an existing class by
 the one list in `claim_seal/relations.py` (`RELATION_SYNONYMS`):
@@ -173,6 +175,8 @@ refutation items (not yet published), 6 of 80 came back `partial` + `contradicts
 version recorded such claims as `unchecked`, which hid real refutations.
 
 ### Attribution overclaim (a heuristic)
+
+**This is the one check that matches words in the writing itself, and it is narrow on purpose.** It only raises a flag for a person to reread; it never changes a verdict or what a page prints. A model could do this job better; that is not built.
 
 A second, pure-code check reads the attribution verb the WRITING uses about its source and
 compares it with the judge's relation for that sentence. It runs only on item sentences that
