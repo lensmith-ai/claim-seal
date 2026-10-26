@@ -1,7 +1,7 @@
 [build-system]
-# Pinned to one reviewed version (after the fixes for CVE-2024-6345 and CVE-2025-47273). claim-seal
+# Pinned to one reviewed version (84.2.1: past every advisory published up to 2026-10-26, latest GHSA-xmj3-9gf7-h52w). claim-seal
 # has no runtime dependencies; this is only what builds the sdist and wheel.
-requires = ["setuptools==78.1.1"]
+requires = ["setuptools==84.2.1"]
 build-backend = "setuptools.build_meta"
 
 [project]

@@ -835,7 +835,11 @@ class Finding9bReleaseGatesAndHonestPolicy(unittest.TestCase):
                        "demo-output.txt", "verify-seal", "sha256sum"):
             self.assertIn(needle, script)
         reqs = self._read("tools", "build-requirements.txt")
-        self.assertRegex(reqs, r"(?m)^setuptools==78\.1\.1 \\\n\s+--hash=sha256:[0-9a-f]{64}$")
+        m = re.search(r"(?m)^setuptools==(\d+\.\d+\.\d+) \\\n\s+--hash=sha256:[0-9a-f]{64}$", reqs)
+        self.assertIsNotNone(m, "build-requirements.txt must pin setuptools by version and hash")
+        # The hash-pinned build requirement and pyproject.toml build-system must name the same version.
+        pyproject = self._read("pyproject.toml")
+        self.assertIn('requires = ["setuptools==%s"]' % m.group(1), pyproject)
 
     def test_owner_gated_release_steps_each_name_the_receipt_to_observe(self):
         text = self._read("RELEASING.md")
