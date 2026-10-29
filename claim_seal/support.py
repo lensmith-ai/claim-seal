@@ -29,7 +29,7 @@ from . import limits
 from .completion import COMPLETION_DISABLED, CompletionDisabled
 from .evidence import (build_claim_evidence, capture_sources, claim_ref, evidence_candidates,
                        source_lineage)
-from .jev import resolve_first_pass
+from .jev import claim_seal_reading, compare_with_judge, resolve_first_pass
 from .prompts import build_claim_prompt, build_prompt
 from .relations import SPAN_RELATIONS, read_relation
 from .resolve import (CITATION_ROW_FIELDS, TEXT_FIELDS, load_sources, resolve, shape_brief,
@@ -483,6 +483,7 @@ def verify(brief: dict, sources: dict, receipts: dict, model, *,
         evidence_record = claim_evidence_sink(verdicts, deciders)
     located = located_claims(report, brief, evidence_record) if gate_support else set()
     counts = {"supported": 0, "partial": 0, "unsupported": 0, "unresolved": 0, "unchecked": 0}
+    compared: list = []
     for n, c in enumerate(report["claims"]):
         cites = c["citations"]
         any_resolved = any(x["resolution"] != "unresolved" for x in cites)
@@ -547,7 +548,10 @@ def verify(brief: dict, sources: dict, receipts: dict, model, *,
                     and isinstance(text, str) and text.strip()):
                 v["citations"][bi]["bears"] = text.strip().strip('"“”')[:240]
         if first is not None:
-            v["decided_by"] = first_pass.claim_decider(first["decisions"].get(n))
+            decision = first["decisions"].get(n)
+            v["decided_by"] = first_pass.claim_decider(
+                decision, claim_seal_reading(v, (verdicts.get(n) or {}).get("relation")))
+            compared.append(v["decided_by"])
         counts[v["verdict"]] = counts.get(v["verdict"], 0) + 1
         target = target_for_claim(brief, c)
         if isinstance(target, dict):
@@ -567,6 +571,10 @@ def verify(brief: dict, sources: dict, receipts: dict, model, *,
             spans["model_executed"] = executed_model
             rec["spans"] = spans
     rec["verdicts"] = counts
+    if first is not None:
+        # Where Jev was confident but the judge decided (shadow, or an answer not in `decide`):
+        # did they agree? Partial never agrees: Jev has no such answer.
+        rec["first_pass"]["compared_with_judge"] = compare_with_judge(compared)
     receipts["verification"] = rec
     return rec
 

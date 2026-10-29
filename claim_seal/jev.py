@@ -1,15 +1,24 @@
-"""Optional Jev first pass for pass 2 ("cascade"). OFF unless a caller turns it on.
+"""Optional Jev first pass for pass 2. OFF unless a caller turns it on; SHADOW when turned on.
 
 With a first pass, each checkable claim is first put to Jev, a small classifier served on
 OpenRouter's decisions endpoint, once per cited source: does this source section support the
 claim, contradict it, or say nothing about it? Jev answers with one of the three and a
-confidence. When every cited source of a claim is answered at or above the threshold, and the
-answers do not disagree with each other, Jev's answer decides the claim and the normal judge is not
-called for it. Every other claim goes to the normal judge, exactly as without a first pass.
+confidence.
+
+SHADOW (the default once on, and the recommended use): Jev's answers are recorded beside the
+judge's, the judge decides every claim exactly as without a first pass, and the run record counts
+where Jev would have decided and whether it agreed. Jev has no "partial" answer; on real composed
+briefs, where the judge calls most claims partial, Jev said "supports" to many of them.
+
+DECIDING ("cascade", opt in with decide=...): when every cited source of a claim is answered at or
+above the threshold, the answers do not disagree with each other, and the claim-level answer is in
+`decide`, Jev's answer decides the claim and the judge is not called for it. Every other claim
+goes to the judge, exactly as without a first pass.
 
     from claim_seal import judge
     from claim_seal.jev import JevFirstPass
-    result = judge(brief, sources, model, first_pass=JevFirstPass(threshold=0.80))
+    result = judge(brief, sources, model, first_pass=JevFirstPass())              # shadow
+    result = judge(brief, sources, model, first_pass=JevFirstPass(decide=("supports",)))
     result = judge(brief, sources, model, first_pass="env")   # on only if CLAIM_SEAL_JEV=on
 
 WHAT JEV IS SHOWN. The claim text and, per citation, the same evidence window the judge must quote
@@ -34,11 +43,13 @@ FAILURE. A missing key, an HTTP error, a timeout, a redirect, an oversized or ma
 claim goes to the normal judge, and the fallback is counted by reason in the run record. A Jev
 failure never fails a claim and never marks one supported.
 
-THE RECORD. Every claim decided with a first pass on carries `decided_by` in its verification block
-(path, reason, threshold, per-citation choice, confidence, resolved model, cost and latency), and
-every claim-evidence row carries a `decider` block inside the seal (path, reason, threshold, and
-per citation the choice, confidence and resolved model). The run record gains `first_pass`:
-settings (never the key), counts, pass-up and fallback reasons, total returned cost, latency.
+THE RECORD. Every claim checked with a first pass on carries `decided_by` in its verification
+block (path, reason, threshold, Jev's claim-level answer when it was confident, per-citation
+choice, confidence, resolved model, cost and latency, and claim-seal's own reading), and every
+claim-evidence row carries a `decider` block inside the seal (path, reason, mode, threshold, Jev's
+claim-level answer, and per citation the choice, confidence and resolved model). The run record
+gains `first_pass`: mode, settings (never the key), counts, pass-up and fallback reasons, total
+returned cost, latency, and the comparison with the judge on the claims the judge decided.
 
 THE KEY is read from the environment variable named by api_key_env (default OPENROUTER_API_KEY)
 once per check, sent only over https (redirects refused, as for OpenAICompatible), and never
@@ -63,6 +74,8 @@ DEFAULT_KEY_ENV = "OPENROUTER_API_KEY"
 DEFAULT_THRESHOLD = 0.80
 DEFAULT_TIMEOUT_S = 10.0
 DEFAULT_POOL = 4
+# Which Jev answers may decide a claim. Empty = shadow: Jev decides nothing, its answers are kept.
+DEFAULT_DECIDE: tuple = ()
 # Sent with every request: no fallback to another provider, no data collection, zero retention,
 # and a price ceiling (USD per million tokens) the provider must stay under.
 DEFAULT_PROVIDER = {"allow_fallbacks": False, "data_collection": "deny", "zdr": True,
@@ -147,8 +160,9 @@ class JevFirstPass:
     api_key_env    name of the environment variable holding the key (default OPENROUTER_API_KEY)
     timeout_s      per call (default 10)
     pool_size      parallel calls (default 4)
-    decide         which Jev answers may decide a claim (default all three); a claim whose answer
-                   is not in this set goes to the judge
+    decide         which Jev answers may decide a claim: any of supports, contradicts,
+                   says_nothing. Default () = shadow: Jev decides nothing, the judge decides every
+                   claim, Jev's answers are recorded beside it.
     provider       the provider routing block sent with each request (default DEFAULT_PROVIDER)
     transport      transport(endpoint, body_bytes, headers, timeout) -> reply bytes; for tests.
                    Default: one https POST, redirects refused.
@@ -157,7 +171,7 @@ class JevFirstPass:
     def __init__(self, *, threshold: float = DEFAULT_THRESHOLD, model: str = DEFAULT_MODEL,
                  endpoint: str = DEFAULT_ENDPOINT, api_key_env: str = DEFAULT_KEY_ENV,
                  timeout_s: float = DEFAULT_TIMEOUT_S, pool_size: int = DEFAULT_POOL,
-                 decide=CHOICES, provider: dict | None = None, transport=None,
+                 decide=DEFAULT_DECIDE, provider: dict | None = None, transport=None,
                  allow_insecure_loopback: bool = False):
         from .adapters import AdapterError, _checked_base_url  # local: adapters imports support
 
@@ -177,10 +191,12 @@ class JevFirstPass:
             raise ValueError("timeout_s must be a positive number")
         self.timeout_s = float(timeout_s)
         self.pool_size = max(1, int(pool_size))
+        if isinstance(decide, str):
+            raise ValueError("decide must be a list or tuple of answers, not one string")
         decide = tuple(decide)
         unknown = [c for c in decide if c not in CHOICES]
-        if unknown or not decide:
-            raise ValueError(f"decide must be a non-empty subset of {CHOICES}, got {decide}")
+        if unknown:
+            raise ValueError(f"decide must be a subset of {CHOICES}, got {decide}")
         self.decide = tuple(c for c in CHOICES if c in decide)
         self.provider = dict(DEFAULT_PROVIDER if provider is None else provider)
         self.transport = transport or _https_transport
@@ -198,7 +214,8 @@ class JevFirstPass:
           CLAIM_SEAL_JEV_ENDPOINT   https URL
           CLAIM_SEAL_JEV_KEY_ENV    name of the variable that holds the key
           CLAIM_SEAL_JEV_TIMEOUT    seconds per call
-          CLAIM_SEAL_JEV_DECIDE     comma list from supports,contradicts,says_nothing
+          CLAIM_SEAL_JEV_DECIDE     comma list from supports,contradicts,says_nothing;
+                                    unset, empty or "none" = shadow (Jev decides nothing)
         """
         env = os.environ if environ is None else environ
         switch = str(env.get("CLAIM_SEAL_JEV", "")).strip().lower()
@@ -223,14 +240,19 @@ class JevFirstPass:
                 kw["timeout_s"] = float(env["CLAIM_SEAL_JEV_TIMEOUT"])
             except ValueError:
                 raise ValueError("CLAIM_SEAL_JEV_TIMEOUT must be a number") from None
-        if env.get("CLAIM_SEAL_JEV_DECIDE"):
-            kw["decide"] = [w.strip() for w in env["CLAIM_SEAL_JEV_DECIDE"].split(",") if w.strip()]
+        decide = str(env.get("CLAIM_SEAL_JEV_DECIDE") or "").strip().lower()
+        if decide and decide != "none":
+            kw["decide"] = [w.strip() for w in decide.split(",") if w.strip()]
         kw.update(overrides)
         return cls(**kw)
 
+    @property
+    def mode(self) -> str:
+        return "decide" if self.decide else "shadow"
+
     def settings(self) -> dict:
         """What the run record keeps: never the key, only the name of its variable."""
-        return {"endpoint": self.endpoint, "model_requested": self.model,
+        return {"mode": self.mode, "endpoint": self.endpoint, "model_requested": self.model,
                 "threshold": self.threshold, "decide": list(self.decide),
                 "timeout_s": self.timeout_s, "api_key_env": self.api_key_env}
 
@@ -329,8 +351,12 @@ class JevFirstPass:
         choice = ("supports" if "supports" in choices else
                   "contradicts" if "contradicts" in choices else "says_nothing")
         if choice not in self.decide:
-            return {"by": "judge", "reason": "class-not-deciding", "answers": answers}
-        return {"by": "jev", "reason": None, "choice": choice, "answers": answers}
+            # Jev was confident and consistent but may not decide this answer: the judge decides,
+            # and Jev's claim-level answer is kept beside it for comparison.
+            return {"by": "judge", "reason": "shadow" if not self.decide else "class-not-deciding",
+                    "jev_choice": choice, "answers": answers}
+        return {"by": "jev", "reason": None, "choice": choice, "jev_choice": choice,
+                "answers": answers}
 
     def _record(self, decisions: dict, unavailable) -> dict:
         answers = [a for d in decisions.values() for a in d["answers"]]
@@ -351,6 +377,7 @@ class JevFirstPass:
                 errors[a["error"]] = errors.get(a["error"], 0) + 1
         return {
             "contract": FIRST_PASS_CONTRACT,
+            "mode": self.mode,
             "status": "unavailable" if unavailable else "ok",
             **({"unavailable": unavailable} if unavailable else {}),
             "settings": self.settings(),
@@ -398,9 +425,10 @@ class JevFirstPass:
         """The decider block kept inside every claim-evidence row of a claim (sealed)."""
         if decision is None:
             return {"by": "none", "reason": "not-checkable", "first_pass": FIRST_PASS_CONTRACT,
-                    "threshold": self.threshold, "answers": []}
+                    "mode": self.mode, "threshold": self.threshold, "answers": []}
         out = {"by": decision["by"], "reason": decision["reason"], "first_pass": FIRST_PASS_CONTRACT,
-               "threshold": self.threshold,
+               "mode": self.mode, "threshold": self.threshold,
+               "jev_choice": decision.get("jev_choice"),
                "answers": [{k: a.get(k) for k in ("citation_index", "choice", "confidence", "model")}
                            if "error" not in a else {"citation_index": a["citation_index"],
                                                      "error": a["error"]}
@@ -410,13 +438,53 @@ class JevFirstPass:
             out["section"] = "evidence-window"
         return out
 
-    def claim_decider(self, decision: dict | None) -> dict:
+    def claim_decider(self, decision: dict | None, reading: str | None = None) -> dict:
         """The decided_by block on a claim's verification (not sealed): the sealed fields plus
-        cost, latency and request id per answer."""
+        cost, latency and request id per answer, and claim-seal's own reading of the claim
+        (see claim_seal_reading) when the judge decided it."""
         out = self.sealed_decider(decision)
         if decision is not None:
             out["answers"] = [dict(a) for a in decision["answers"]]
+            if decision["by"] == "judge":
+                out["claim_seal_reading"] = reading
         return out
+
+
+# How Jev's claim-level answer compares with what claim-seal recorded for the same claim.
+AGREES_WITH = {"supports": "supported", "contradicts": "unsupported-contradicts",
+               "says_nothing": "unsupported"}
+
+
+def claim_seal_reading(verification: dict, relation=None) -> str:
+    """claim-seal's verdict for a claim in words comparable with Jev's: supported, partial,
+    unsupported-contradicts (the judge named the relation contradicts), unsupported, unresolved,
+    unchecked."""
+    from .relations import read_relation  # local: keeps this module light
+    verdict = verification.get("verdict")
+    override = (verification.get("verdict_override") or {}).get("rule")
+    if verdict == "unsupported" and (override == "relation-contradicts"
+                                     or read_relation(relation)[0] == "contradicts"):
+        return "unsupported-contradicts"
+    return str(verdict)
+
+
+def compare_with_judge(decided_by: list) -> dict:
+    """Over the claims the judge decided where Jev gave a confident claim-level answer: how many
+    there were, how many agreed, and every (Jev answer, claim-seal reading) pair counted."""
+    pairs: dict = {}
+    agree = compared = 0
+    for block in decided_by:
+        choice = block.get("jev_choice")
+        if block.get("by") != "judge" or not choice:
+            continue
+        reading = block.get("claim_seal_reading")
+        compared += 1
+        agree += AGREES_WITH.get(choice) == reading
+        key = f"{choice} vs {reading}"
+        pairs[key] = pairs.get(key, 0) + 1
+    return {"compared": compared, "agree": agree,
+            "agreement": round(agree / compared, 3) if compared else None,
+            "pairs": dict(sorted(pairs.items()))}
 
 
 def resolve_first_pass(first_pass):
@@ -431,6 +499,7 @@ def resolve_first_pass(first_pass):
     raise ValueError("first_pass must be None, \"env\" or a claim_seal.jev.JevFirstPass")
 
 
-__all__ = ["JevFirstPass", "JevError", "resolve_first_pass", "CHOICES", "QUESTION",
+__all__ = ["JevFirstPass", "JevError", "resolve_first_pass", "claim_seal_reading",
+           "compare_with_judge", "AGREES_WITH", "DEFAULT_DECIDE", "CHOICES", "QUESTION",
            "VERDICT_BY_CHOICE", "FIRST_PASS_CONTRACT", "DEFAULT_ENDPOINT", "DEFAULT_MODEL",
            "DEFAULT_KEY_ENV", "DEFAULT_THRESHOLD"]

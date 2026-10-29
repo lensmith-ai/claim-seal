@@ -14,8 +14,8 @@ import helpers
 from helpers import corpus, per_claim_model, fixed, FROZEN_WHOLE_BRIEF_REPLY
 
 from claim_seal import judge, verify_seal
-from claim_seal.jev import (CHOICES, DEFAULT_THRESHOLD, FIRST_PASS_CONTRACT, JevError,
-                            JevFirstPass, resolve_first_pass)
+from claim_seal.jev import (CHOICES, DEFAULT_DECIDE, DEFAULT_THRESHOLD, FIRST_PASS_CONTRACT,
+                            JevError, JevFirstPass, resolve_first_pass)
 from claim_seal.seal import chain_value
 from claim_seal.support import located_claims
 
@@ -71,8 +71,10 @@ def table(by_claim, default=("says_nothing", 0.5)):
 
 
 def fp(rule, **kw):
+    """A first pass in DECIDING mode (all three answers may decide) unless decide= is given."""
     fake = FakeJev(rule)
     kw.setdefault("api_key_env", KEY_ENV)
+    kw.setdefault("decide", CHOICES)
     return JevFirstPass(transport=fake, **kw), fake
 
 
@@ -466,10 +468,82 @@ class Paths(unittest.TestCase):
             judge(b, s, per_claim_model()[0], evidence=False, first_pass=first)
 
 
+@patch.dict(os.environ, {KEY_ENV: KEY})
+class Shadow(unittest.TestCase):
+    """The default once on: Jev runs and is recorded, the judge decides every claim."""
+
+    def run_shadow(self, rule):
+        fake = FakeJev(rule)
+        first = JevFirstPass(transport=fake, api_key_env=KEY_ENV)
+        model, calls = per_claim_model()
+        b, s = corpus()
+        return judge(b, s, model, first_pass=first), calls, fake
+
+    def test_shadow_is_the_default(self):
+        self.assertEqual(DEFAULT_DECIDE, ())
+        self.assertEqual(JevFirstPass(api_key_env=KEY_ENV).mode, "shadow")
+
+    def test_the_judge_decides_everything_and_results_equal_the_off_run(self):
+        result, calls, fake = self.run_shadow(lambda c, s: ("supports", 0.99))
+        self.assertEqual(set(calls), {RELAY, LABS, AUDIT, TRADE})       # every checkable claim judged
+        self.assertTrue(fake.calls)                                     # and Jev was asked
+        b, s = corpus()
+        base = judge(b, s, per_claim_model()[0])
+        self.assertEqual(strip_first_pass(result), strip_first_pass(base))
+        rows = [{k: v for k, v in r.items() if k != "decider"} for r in result["claim_evidence"]["outcomes"]]
+        self.assertEqual(chain_value(rows), base["claim_evidence"]["verification"]["seal"]["value"])
+        self.assertTrue(verify_seal(result["claim_evidence"]))
+        rec = result["verification"]["first_pass"]
+        self.assertEqual((rec["mode"], rec["decided_by_jev"]), ("shadow", 0))
+
+    def test_jevs_answer_is_recorded_beside_the_judges_and_compared(self):
+        result, _, _ = self.run_shadow(table({RELAY: ("supports", 0.99), AUDIT: ("supports", 0.95),
+                                              LABS: ("supports", 0.5)}))
+        v = claims_of(result)
+        self.assertEqual((v[AUDIT]["decided_by"]["reason"], v[AUDIT]["decided_by"]["jev_choice"],
+                          v[AUDIT]["decided_by"]["claim_seal_reading"]), ("shadow", "supports", "partial"))
+        self.assertEqual(v[LABS]["decided_by"]["reason"], "below-threshold")
+        self.assertIsNone(v[LABS]["decided_by"]["jev_choice"])
+        seen = result["verification"]["first_pass"]["compared_with_judge"]
+        # RELAY: the judge's supported is gated to unresolved (no located quote in this corpus)
+        self.assertEqual(seen["pairs"], {"supports vs partial": 1, "supports vs unresolved": 1})
+        self.assertEqual((seen["compared"], seen["agree"]), (2, 0))
+        row = rows_for(result, 3)[0]
+        self.assertEqual((row["decider"]["by"], row["decider"]["mode"], row["decider"]["jev_choice"]),
+                         ("judge", "shadow", "supports"))
+
+    def test_agreement_is_counted(self):
+        def rule(claim, section):
+            return ("supports", 0.99) if claim == LABS else ("says_nothing", 0.2)
+        model = helpers.Scripted(lambda prompt: json.dumps({"verdicts": [{
+            "claim": 1, "verdict": "supported", "why": "w", "relation": "says",
+            "evidence_spans": [{"citation_index": 0, "support_span": "A compaction pass cut resident memory"}]}]}))
+        first = JevFirstPass(transport=FakeJev(rule), api_key_env=KEY_ENV)
+        b, s = corpus()
+        result = judge(b, s, model, first_pass=first)
+        self.assertEqual(claims_of(result)[LABS]["verdict"], "supported")
+        seen = result["verification"]["first_pass"]["compared_with_judge"]
+        self.assertEqual(seen["pairs"].get("supports vs supported"), 1)
+        self.assertGreaterEqual(seen["agree"], 1)
+
+    def test_decide_supports_only(self):
+        first, _ = fp(table({RELAY: ("supports", 0.99), AUDIT: ("contradicts", 0.99)}), decide=("supports",))
+        model, calls = per_claim_model()
+        b, s = corpus()
+        result = judge(b, s, model, first_pass=first)
+        v = claims_of(result)
+        self.assertEqual(v[RELAY]["decided_by"]["by"], "jev")
+        self.assertEqual((v[AUDIT]["decided_by"]["by"], v[AUDIT]["decided_by"]["reason"]),
+                         ("judge", "class-not-deciding"))
+        self.assertEqual(result["verification"]["first_pass"]["mode"], "decide")
+        self.assertNotIn(RELAY, calls)
+        self.assertIn(AUDIT, calls)
+
+
 class Settings(unittest.TestCase):
     def test_bad_settings_are_refused(self):
         for kw in ({"threshold": 0}, {"threshold": 1.5}, {"threshold": True}, {"threshold": "0.8"},
-                   {"decide": ()}, {"decide": ("supports", "maybe")}, {"timeout_s": 0},
+                   {"decide": "supports"}, {"decide": ("supports", "maybe")}, {"timeout_s": 0},
                    {"model": ""}, {"endpoint": "http://example.test/decisions"},
                    {"endpoint": "https://user:pw@example.test/decisions"}):
             with self.subTest(kw=kw), self.assertRaises(ValueError):
@@ -477,6 +551,8 @@ class Settings(unittest.TestCase):
 
     def test_from_env_is_off_unless_switched_on(self):
         self.assertIsNone(JevFirstPass.from_env({}))
+        self.assertEqual(JevFirstPass.from_env({"CLAIM_SEAL_JEV": "on"}).decide, ())
+        self.assertEqual(JevFirstPass.from_env({"CLAIM_SEAL_JEV": "on", "CLAIM_SEAL_JEV_DECIDE": "none"}).decide, ())
         self.assertIsNone(JevFirstPass.from_env({"CLAIM_SEAL_JEV": "off", "CLAIM_SEAL_JEV_THRESHOLD": "0.9"}))
         got = JevFirstPass.from_env({"CLAIM_SEAL_JEV": "on", "CLAIM_SEAL_JEV_THRESHOLD": "0.9",
                                      "CLAIM_SEAL_JEV_MODEL": "typesafe/other",
@@ -584,7 +660,7 @@ class Cli(unittest.TestCase):
             os.environ.pop("CLAIM_SEAL_TEST_NO_SUCH_KEY", None)
             code, out = run_cli("check", BRIEF, SOURCES, "--judge", "replay:" + ANSWERS, "--jev")
         self.assertEqual(code, 0)
-        self.assertIn("jev first pass: threshold 0.80, decided 0", out)
+        self.assertIn("jev first pass (shadow): threshold 0.80, decided 0", out)
         self.assertIn('"missing-key": 4', out)
         self.assertIn("decided by: judge (fallback:missing-key)", out)
 
@@ -592,7 +668,7 @@ class Cli(unittest.TestCase):
         from test_adapters_cli_scan import ANSWERS, BRIEF, SOURCES, run_cli
         import contextlib
         import io
-        for extra in (["--jev", "--no-evidence"], ["--jev-threshold", "2"]):
+        for extra in (["--jev", "--no-evidence"], ["--jev-threshold", "2"], ["--jev-decide", "maybe"]):
             with self.subTest(extra=extra), contextlib.redirect_stderr(io.StringIO()):
                 code, _ = run_cli("check", BRIEF, SOURCES, "--judge", "replay:" + ANSWERS, *extra)
                 self.assertEqual(code, 2)

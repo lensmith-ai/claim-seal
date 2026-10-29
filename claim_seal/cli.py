@@ -2,7 +2,7 @@
 
   claim-seal check BRIEF.json SOURCES.json [--judge replay:ANSWERS.json | --judge openai[:MODEL]]
                    [--out RESULT.json [--force]] [--whole-brief] [--no-spans] [--no-evidence]
-                   [--jev [--jev-threshold T]] ...
+                   [--jev [--jev-threshold T] [--jev-decide ANSWERS]] ...
   claim-seal verify-seal RECORD.json [RECORD.json ...]
 
 check without --judge runs pass 1 only (are the cited references real?) and says so.
@@ -78,8 +78,11 @@ def _print_report(result: dict, out, labels: dict | None = None) -> None:
     first = rec.get("first_pass")
     if first:
         cost = first.get("cost_usd")
-        w(f"jev first pass: threshold {first['settings']['threshold']:.2f}, "
+        seen = first.get("compared_with_judge") or {}
+        w(f"jev first pass ({first['mode']}): threshold {first['settings']['threshold']:.2f}, "
           f"decided {first['decided_by_jev']}, passed to the judge {first['passed_to_judge']}, "
+          f"agreed with the judge {seen.get('agree', 0)} of {seen.get('compared', 0)} "
+          f"{json.dumps(seen.get('pairs') or {})}, "
           f"fallbacks {first['fallbacks']} {json.dumps(first['fallback_reasons'])}, "
           f"calls {first['calls']}, cost USD {cost if cost is not None else 'unreported'}, "
           f"models {', '.join(first['models_returned']) or '-'}\n")
@@ -184,15 +187,20 @@ def cmd_check(args) -> int:
         else:
             model = _model_from(args.judge)
             first_pass = None
-            if args.jev or args.jev_threshold is not None:
+            if args.jev or args.jev_threshold is not None or args.jev_decide is not None:
                 if args.no_evidence:
                     print("refused: --jev needs the evidence pass; drop --no-evidence",
                           file=sys.stderr)
                     return 2
                 try:
-                    first_pass = JevFirstPass.from_env(
-                        require_switch=False,
-                        **({"threshold": args.jev_threshold} if args.jev_threshold is not None else {}))
+                    overrides = {}
+                    if args.jev_threshold is not None:
+                        overrides["threshold"] = args.jev_threshold
+                    if args.jev_decide is not None:
+                        words = args.jev_decide.strip().lower()
+                        overrides["decide"] = ([] if words in ("", "none") else
+                                               [w.strip() for w in words.split(",") if w.strip()])
+                    first_pass = JevFirstPass.from_env(require_switch=False, **overrides)
                 except ValueError as exc:
                     print(f"refused: {exc}", file=sys.stderr)
                     return 2
@@ -288,11 +296,16 @@ def main(argv: list[str] | None = None) -> int:
     check.add_argument("--deadline", type=float, default=120.0,
                        help="per-claim deadline in seconds, queue wait included (default 120)")
     check.add_argument("--jev", action="store_true",
-                       help="ask Jev first (optional first pass; key from $OPENROUTER_API_KEY or "
+                       help="also ask Jev (optional first pass, shadow by default: recorded "
+                            "beside the judge, decides nothing; key from $OPENROUTER_API_KEY or "
                             "$CLAIM_SEAL_JEV_KEY_ENV; other settings from CLAIM_SEAL_JEV_*)")
     check.add_argument("--jev-threshold", type=float, default=None,
-                       help="confidence at or above which Jev's answer decides (default 0.80; "
+                       help="confidence at or above which Jev's answer counts (default 0.80; "
                             "implies --jev)")
+    check.add_argument("--jev-decide", default=None, metavar="ANSWERS",
+                       help="comma list of Jev answers allowed to decide a claim instead of the "
+                            "judge (supports,contradicts,says_nothing); default none = shadow; "
+                            "implies --jev")
     check.set_defaults(func=cmd_check)
     verify = sub.add_parser("verify-seal", help="recompute the digest chain of sealed records")
     verify.add_argument("records", nargs="+")
