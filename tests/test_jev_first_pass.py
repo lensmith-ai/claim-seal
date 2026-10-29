@@ -213,6 +213,15 @@ class Mapping(unittest.TestCase):
                 result, _ = self.decide(choice)
                 self.assertNotEqual(claims_of(result)[AUDIT]["verdict"], "partial")
 
+    def test_a_jev_decided_item_has_no_sentence_spans_so_its_lines_carry_the_card_verdict(self):
+        from claim_seal import line_states
+        result, _ = self.decide("supports")
+        v = claims_of(result)[AUDIT]
+        self.assertTrue(all("span" not in c for c in v["citations"]))
+        lines = [line for line in line_states(result["brief"])["lines"] if line["item"] == 4]
+        self.assertTrue(lines)
+        self.assertEqual({(line["state"], line["state_scope"]) for line in lines}, {("supported", "card")})
+
     def test_supported_by_jev_passes_the_support_gate_only_through_a_located_row(self):
         result, _ = self.decide("supports")
         located = located_claims({"claims": [
