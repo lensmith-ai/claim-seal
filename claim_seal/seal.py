@@ -3,7 +3,8 @@
 WHAT IT COVERS. Every outcome row, in order, whole: the claim it belongs to (by digest), the
 citation, the support state and its reason, every evidence span (offsets, digests, any
 extension), the relation verb, whether the judge chose that verb or it was defaulted
-(relation_source), strength, corroboration, and the source binding. The chain starts from the
+(relation_source), strength, corroboration, and the source binding; and, only when the optional
+Jev first pass ran (claim_seal.jev), the row's decider block. The chain starts from the
 contract name and the row count, so appending, deleting or reordering rows breaks it too.
 
   chain_0 = sha256(canonical({"contract": ..., "outcome_count": N}))

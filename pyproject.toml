@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "claim-seal"
-version = "0.1.0"
+version = "0.2.0"
 description = "Check each claim against the sources it cites, record where the writing steps beyond them, and seal the claim-evidence rows (not the verdicts or sentence labels) in a SHA-256 digest chain."
 readme = "README.md"
 license = "MIT"

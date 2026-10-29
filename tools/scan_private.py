@@ -35,7 +35,7 @@ DENYLIST_ENV = "CLAIM_SEAL_DENYLIST"
 
 # Environment variables this project reads or documents. Any other name read from or exported
 # to the environment is flagged: it may be a leftover from somewhere else.
-ALLOWED_ENV = re.compile(r"^(CLAIM_SEAL_[A-Z0-9_]+|OPENAI_API_KEY)$")
+ALLOWED_ENV = re.compile(r"^(CLAIM_SEAL_[A-Z0-9_]+|OPENAI_API_KEY|OPENROUTER_API_KEY)$")
 _ENV_USE = re.compile(r"""(?:environ(?:\.get)?\(\s*|environ\[\s*|getenv\(\s*)["']([A-Z][A-Z0-9_]*)["']"""
                       r"""|\bexport\s+([A-Z][A-Z0-9_]*)=""")
 

@@ -5,7 +5,8 @@
 > **AI;DR (AI, didn't read)**
 > Claude wrote this code and this README. I haven't read either, and I can't explain or test it line by line myself.
 > What I have done: claim-seal checks every brief my briefing tool writes, and a second daily brief. I routinely click through to the cited sources by hand, to see that what a claim says is really in the source, and that when a claim goes further, the going further is real. That's often the point, since claims built on plausible implication are the ones people follow. Everything I've checked has held up.
-> 283 automated tests pass, an independent AI reviewer compared this README against the code before release, and the problems an independent AI security review found are fixed, each with a test ([what changed](#what-changed-after-the-security-review)). Treat it as a working experiment, and open an issue if something's off ([how](CONTRIBUTING.md)). (Arya)
+> 327 automated tests pass, an independent AI reviewer compared this README against the code before release, and the problems an independent AI security review found are fixed, each with a test ([what changed](#what-changed-after-the-security-review)). Treat it as a working experiment, and open an issue if something's off ([how](CONTRIBUTING.md)). (Arya)
+> The [Jev first pass](#jev-first-pass-optional) is new and off unless you turn it on. Its numbers come from one measurement on 200 human-labelled claim/evidence pairs, not from my own checks of real briefs.
 
 **Where it stands (2026-10-26).** Since the evening of 2026-10-25 (UTC), every brief my briefing tool writes is also run through claim-seal. It reuses the production judge's answers instead of asking a model again, and compares its results with the checker it was extracted from. That checker still decides what the reader sees. On the first 5 briefs the two agreed on 30 of 30 claim verdicts, 35 of 35 sentence relations and 56 of 56 evidence windows, and made the same seals. Because the answers are replayed, this compares two code paths on the same model answers, not two independent judgements. From 2026-10-26 a second daily brief runs it the same way; this section will report what it finds. Both run commit e0b352c, the version before the security fixes. The fixes in this repository change the judge prompts and when a verdict counts as supported, so the production copies move to the current version only after agreement is measured again.
 
@@ -234,7 +235,9 @@ belongs to (by a digest of the claim text, recorded in the row but NOT re-checke
 brief by `verify_seal()`, so editing a claim's text in the brief still verifies), the citation,
 the support state and its reason, every evidence span, the relation verb, `relation_source`
 (whether the judge chose the verb or it was defaulted), strength, corroboration and the source
-binding. Editing a row, upgrading a verb, appending, deleting or reordering rows, or relabelling
+binding. With the optional [Jev first pass](#jev-first-pass-optional) on, each row also holds a
+`decider` block (who decided the claim, and Jev's answers), so changing who decided breaks the
+chain too. Editing a row, upgrading a verb, appending, deleting or reordering rows, or relabelling
 a defaulted verb as the judge's own all break the chain, and `verify_seal()` returns False.
 
 **What it does not cover:** everything else in a `judge()` result. That includes the claim
@@ -254,6 +257,92 @@ normalizer) are taken when you hand them to `judge()`, and a source that drifts 
 capture is refused. `normalizer_sha256` is the digest of this library's own normalizer source
 file (`claim_seal/normalize.py`), so it differs from the digest the original composer records
 for `norm/v1`, although the transformation is the same.
+
+## Jev first pass (optional)
+
+Off by default. When you turn it on, each claim is first put to Jev, a small classifier served on
+OpenRouter's decisions endpoint, once per cited source: does this source support the claim,
+contradict it, or say nothing about it? Jev answers with one of the three and a confidence. If
+every cited source of a claim gets an answer at or above the threshold (default 0.80) and the
+answers do not disagree, Jev's answer decides that claim and the judge model is not called for it.
+Every other claim goes to the judge exactly as before.
+
+```python
+from claim_seal import judge, JevFirstPass
+result = judge(brief, sources, model, first_pass=JevFirstPass(threshold=0.80))
+result = judge(brief, sources, model, first_pass="env")   # on only when CLAIM_SEAL_JEV=on
+```
+
+```
+export OPENROUTER_API_KEY=...
+python3 -m claim_seal check claims.json sources.json --judge openai:MODEL_NAME --jev [--jev-threshold 0.9]
+```
+
+**How Jev's answer becomes a verdict.** `supports` becomes `supported`; `contradicts` becomes
+`unsupported` with the relation `contradicts`; `says_nothing` becomes `unsupported`. Jev has no
+"partial", so a claim the judge would call `partial` (the source points that way but does not
+carry the whole claim) can come back `supported` from Jev. With several cited sources: all
+`says_nothing` gives `unsupported`; `contradicts` with no `supports` gives `unsupported`;
+`supports` with no `contradicts` gives `supported`; `supports` and `contradicts` together go to
+the judge.
+
+**What Jev reads, and what is located.** Jev is shown the claim and the same window of the
+captured source that the judge must quote from. Jev quotes nothing, so for a claim it calls
+supported, the located passage in the sealed row is that whole window (up to about 2,800
+characters), not one sentence; the row's `decider.section` says `evidence-window` so nobody takes
+it for a quote. Its relation is `undetermined` (Jev does not say whether the source states the
+claim or implies it), and the claim gets no per-sentence spans or goes-further labels. A cited
+source with no captured body has no window, and its claim goes to the judge. A source can try to
+steer Jev just as it can the judge.
+
+**What is recorded.** Each claim's `verification.decided_by`: who decided (`jev`, `judge`, or
+`none` for a claim no model could check), why it went to the judge (`below-threshold`,
+`citations-disagree`, `class-not-deciding`, `no-window`, or `fallback:` plus the failure), and per
+cited source Jev's choice, confidence, the model id that answered, cost and latency. Each sealed
+row holds a `decider` block with the same choices, confidences and model ids. The run record
+gains `first_pass`: the settings (the key's variable name, never the key), counts, reasons, total
+returned cost and latency.
+
+**When Jev fails.** No key, an HTTP error, a timeout, a redirect, a reply that is too large or not
+the expected shape: that claim goes to the judge, and `first_pass.fallbacks` counts it by reason.
+A Jev failure never fails a claim and never marks one supported.
+
+**Settings.** `JevFirstPass(threshold=0.80, model="typesafe/jev-1.14-20261014",
+endpoint="https://openrouter.ai/api/alpha/decisions", api_key_env="OPENROUTER_API_KEY",
+timeout_s=10, pool_size=4, decide=("supports", "contradicts", "says_nothing"))`. `decide` limits
+which Jev answers may decide; leave out `"supports"` to let Jev settle only the negatives. Each
+request asks the provider for no fallbacks, no data collection and zero retention. The same
+settings come from `CLAIM_SEAL_JEV` (on/off), `CLAIM_SEAL_JEV_THRESHOLD`, `CLAIM_SEAL_JEV_MODEL`,
+`CLAIM_SEAL_JEV_ENDPOINT`, `CLAIM_SEAL_JEV_KEY_ENV`, `CLAIM_SEAL_JEV_TIMEOUT` and
+`CLAIM_SEAL_JEV_DECIDE`. The endpoint follows the adapter's rules: https only, redirects refused,
+and the key is read when a check starts and never stored or written.
+
+**What was measured.** One test, 200 human-labelled claim/evidence pairs (each a short claim
+and one evidence sentence, from a public fact-checking dataset), each put to Jev once
+(`typesafe/jev-1.14-20261014`). claim-seal's judge had answered the same pairs earlier; its
+verdicts were read as supports (`supported`), refutes (relation `contradicts`) or not enough
+information (everything else).
+
+| | pairs right | rate |
+|---|---|---|
+| Jev alone | 164 / 200 | 0.820 |
+| claim-seal's judge alone | 160 / 200 | 0.800 |
+| Jev first, judge below 0.80 | 171 / 200 | 0.855 |
+| Jev first, judge below 0.90 | 169 / 200 | 0.845 |
+
+At 0.80 Jev decided 157 of the 200 pairs (78.5%) and passed 43 to the judge. On those 157 Jev was
+right 144 times (0.917); the judge, on the same 157, 133 times (0.847). 13 of Jev's answers at or
+above 0.80 were wrong, 7 of them on pairs people labelled "not enough information", which Jev
+called supports or contradicts: that is its weakest class (of the 22 such pairs Jev decided,
+15 were right). Cost per pair: Jev USD
+0.0000186, the judge model used in that test USD 0.00512, Jev first at 0.80 USD 0.00121 (about
+76% less). Jev's median call took 0.115 s (0.165 s at the 95th percentile), the judge's 3.3 s
+(6.2 s).
+
+What this does not show: Jev read one short evidence sentence per pair, while in claim-seal it
+reads a window of a longer document; real briefs hold many claims that go a step beyond their
+source, which the judge calls `partial` and Jev has no answer for; and 200 pairs is one small
+sample. Measure on your own claims before you rely on it, and set the threshold from that.
 
 ## Install
 
@@ -282,7 +371,8 @@ budget. Return `claim_seal.ModelText(text, model="name")` to record which model 
 
 `judge()` options (defaults are the composer's production settings): `sharded=True` (one call per
 claim; required for per-sentence relations), `spans=True`, `local_placement=True`,
-`evidence=True`, `completion=False`, `locating_quote=False`, `pool_size=2`, `claim_deadline_s=120`.
+`evidence=True`, `completion=False`, `locating_quote=False`, `pool_size=2`, `claim_deadline_s=120`,
+`first_pass=None` (the optional [Jev first pass](#jev-first-pass-optional), off).
 `completion=True` (try one more source item for a `partial` claim) is **disabled in this
 release** and raises `CompletionDisabled`: the citation it added sat outside the sealed record.
 
@@ -334,7 +424,8 @@ python3 -m claim_seal verify-seal result.json                 # exit 0 ok, 1 fai
 
 Options: `--whole-brief`, `--no-spans`, `--no-local-placement`, `--no-evidence`, `--completion`
 (disabled in this release: refused with exit 2),
-`--pool N`, `--deadline S`, `--force`.
+`--pool N`, `--deadline S`, `--force`, `--jev` and `--jev-threshold T` (the optional
+[Jev first pass](#jev-first-pass-optional); refused with `--no-evidence`).
 
 `--out` creates a new file (mode 0600 before your umask) and refuses, with exit 2 and before the
 check runs, a path that already exists. `--force` lets it replace an existing regular file. A

@@ -29,6 +29,7 @@ from . import limits
 from .completion import COMPLETION_DISABLED, CompletionDisabled
 from .evidence import (build_claim_evidence, capture_sources, claim_ref, evidence_candidates,
                        source_lineage)
+from .jev import resolve_first_pass
 from .prompts import build_claim_prompt, build_prompt
 from .relations import SPAN_RELATIONS, read_relation
 from .resolve import (CITATION_ROW_FIELDS, TEXT_FIELDS, load_sources, resolve, shape_brief,
@@ -254,6 +255,25 @@ def _verify_sharded(report: dict, checkable: list, model, *, citation_spans_enab
             "pool_size": pool_size, "deadline_s": deadline_s}
 
 
+def _prompt_for_claims(report: dict, keep: list, *, span_fields_by_claim: dict | None,
+                       citation_spans_enabled: bool, claim_evidence_candidates: dict | None,
+                       locating_quote: bool) -> tuple[str, list]:
+    """The whole-brief prompt over the claims in `keep` only (report indexes), numbered 1..k by
+    the same builder; returns (prompt, keep in prompt order). Used when the Jev first pass has
+    already decided some claims."""
+    sub = {"claims": [report["claims"][n] for n in keep]}
+    candidates = (None if claim_evidence_candidates is None else
+                  {(k, i): text for k, n in enumerate(keep)
+                   for (cn, i), text in claim_evidence_candidates.items() if cn == n})
+    fields = (None if span_fields_by_claim is None else
+              {k: span_fields_by_claim.get(n) or {} for k, n in enumerate(keep)})
+    prompt, sub_checkable = build_prompt(sub, span_fields_by_claim=fields,
+                                         citation_spans_enabled=citation_spans_enabled,
+                                         claim_evidence_candidates=candidates,
+                                         sharded=False, locating_quote=locating_quote)
+    return prompt, [keep[k] for k in sub_checkable]
+
+
 # ---- the public support gate ------------------------------------------------------------------
 SUPPORT_GATE_RULE = "support-not-located"
 
@@ -298,7 +318,8 @@ def verify(brief: dict, sources: dict, receipts: dict, model, *,
            completion: bool = False, completion_cap: int = 6,
            pool_size: int = VERIFY_POOL_DEFAULT,
            claim_deadline_s: float = VERIFY_CLAIM_DEADLINE_S,
-           text_fields: tuple = TEXT_FIELDS, gate_support: bool = True) -> dict:
+           text_fields: tuple = TEXT_FIELDS, gate_support: bool = True,
+           first_pass=None) -> dict:
     """Run both passes. MUTATES `brief`: shape_brief fixes it in place (a string detail becomes
     [detail]), every claim gains a `verification` block, and the record
     is written to receipts["verification"] and returned. Most callers want judge() instead.
@@ -315,9 +336,17 @@ def verify(brief: dict, sources: dict, receipts: dict, model, *,
 
     A model exception on the whole-brief path propagates (the caller owns that failure); on the
     per-claim path it is classified per claim.
+
+    first_pass (default None, off): a claim_seal.jev.JevFirstPass, or "env". See claim_seal.jev.
+    It needs the evidence windows (claim_evidence_candidates). Claims Jev decides are not sent to
+    `model`; every other claim is judged exactly as without it. With None nothing changes.
     """
     if completion:
         raise CompletionDisabled(COMPLETION_DISABLED)
+    first_pass = resolve_first_pass(first_pass)
+    if first_pass is not None and claim_evidence_candidates is None:
+        raise ValueError("the Jev first pass needs the evidence pass (evidence windows); "
+                         "it cannot run with evidence=False")
     limits.check_inputs(brief, sources)
     shape_brief(brief, in_place=True)
     labels = {sid: entry["label"] for sid, entry in load_sources(sources).items()}
@@ -334,9 +363,23 @@ def verify(brief: dict, sources: dict, receipts: dict, model, *,
     verdicts: dict = {}
     span_status = None
     executed_model = None
-    if checkable and sharded:
+    # The optional Jev first pass: the claims it decides leave the judge's list. Off, the judge's
+    # list is `checkable` itself and the prompt is the one built above.
+    first = None
+    judge_checkable = checkable
+    jev_decided: list = []
+    if first_pass is not None:
+        first = first_pass.run(report, checkable, claim_evidence_candidates)
+        jev_decided = [n for n in checkable if first["decisions"][n]["by"] == "jev"]
+        judge_checkable = [n for n in checkable if n not in jev_decided]
+        if jev_decided and judge_checkable and not sharded:
+            prompt, judge_checkable = _prompt_for_claims(
+                report, judge_checkable, span_fields_by_claim=span_fields_by_claim,
+                citation_spans_enabled=citation_spans_enabled,
+                claim_evidence_candidates=claim_evidence_candidates, locating_quote=locating_quote)
+    if judge_checkable and sharded:
         started = time.monotonic()
-        out = _verify_sharded(report, checkable, model,
+        out = _verify_sharded(report, judge_checkable, model,
                               citation_spans_enabled=citation_spans_enabled,
                               claim_evidence_candidates=claim_evidence_candidates,
                               span_fields_by_claim=span_fields_by_claim,
@@ -356,17 +399,18 @@ def verify(brief: dict, sources: dict, receipts: dict, model, *,
                                      ("claim", "status", "reason", "attempts", "queue_wait_s",
                                       "wall_s", "model_executed", "prompt_sha256_8", "error")}
                                     for s in sorted(out["shards"], key=lambda s: s["claim"])]}})
-        if ok_shards:
+        if ok_shards or jev_decided:
             rec["status"] = "ok"
         else:
             rec["status"] = "failed"
-            rec["error"] = ("sharded verification: no shard returned a usable verdict "
-                            f"({len(checkable)} claims, reasons "
-                            + ",".join(sorted({s.get('reason') or 'unknown'
-                                               for s in out['shards']})) + ")")
             if citation_spans_enabled:
                 span_status = "model-output-invalid"
-    elif checkable:
+        if not ok_shards:
+            rec["error"] = ("sharded verification: no shard returned a usable verdict "
+                            f"({len(judge_checkable)} claims, reasons "
+                            + ",".join(sorted({s.get('reason') or 'unknown'
+                                               for s in out['shards']})) + ")")
+    elif judge_checkable:
         # ONE RETRY on an empty answer, and only on an empty answer: a malformed answer is a
         # format problem a retry cannot fix. Both attempts are recorded.
         started = time.monotonic()
@@ -399,8 +443,8 @@ def verify(brief: dict, sources: dict, receipts: dict, model, *,
             for n, v in numbered:
                 if n in duplicates:
                     continue
-                if 1 <= n <= len(checkable):
-                    verdicts[checkable[n - 1]] = {
+                if 1 <= n <= len(judge_checkable):
+                    verdicts[judge_checkable[n - 1]] = {
                         "verdict": str(v.get("verdict") or "").lower(),
                         "why": str(v.get("why") or "")[:200],
                         **({"citation_spans": v.get("citation_spans")} if citation_spans_enabled else {}),
@@ -420,7 +464,23 @@ def verify(brief: dict, sources: dict, receipts: dict, model, *,
             if citation_spans_enabled and span_status is None:
                 span_status = "model-output-invalid"
 
-    evidence_record = claim_evidence_sink(verdicts) if claim_evidence_sink is not None else None
+    deciders = None
+    if first is not None:
+        for n in jev_decided:
+            verdicts[n] = first_pass.verdict_entry(first["decisions"][n], claim_evidence_candidates,
+                                                   n, spans=citation_spans_enabled)
+        if jev_decided and not judge_checkable:
+            # Jev decided every checkable claim: the judge was not called at all.
+            rec.update({"status": "ok", "model": None, "attempts": 0})
+        deciders = {n: first_pass.sealed_decider(first["decisions"].get(n))
+                    for n in range(len(report["claims"]))}
+        rec["first_pass"] = first["record"]
+    if claim_evidence_sink is None:
+        evidence_record = None
+    elif deciders is None:
+        evidence_record = claim_evidence_sink(verdicts)
+    else:
+        evidence_record = claim_evidence_sink(verdicts, deciders)
     located = located_claims(report, brief, evidence_record) if gate_support else set()
     counts = {"supported": 0, "partial": 0, "unsupported": 0, "unresolved": 0, "unchecked": 0}
     for n, c in enumerate(report["claims"]):
@@ -486,6 +546,8 @@ def verify(brief: dict, sources: dict, receipts: dict, model, *,
             if (isinstance(bi, int) and not isinstance(bi, bool) and 0 <= bi < len(v["citations"])
                     and isinstance(text, str) and text.strip()):
                 v["citations"][bi]["bears"] = text.strip().strip('"“”')[:240]
+        if first is not None:
+            v["decided_by"] = first_pass.claim_decider(first["decisions"].get(n))
         counts[v["verdict"]] = counts.get(v["verdict"], 0) + 1
         target = target_for_claim(brief, c)
         if isinstance(target, dict):
@@ -543,7 +605,7 @@ def judge(brief: dict, sources: dict, model, *, spans: bool = True, sharded: boo
           completion: bool = False, completion_cap: int = 6,
           pool_size: int = VERIFY_POOL_DEFAULT,
           claim_deadline_s: float = VERIFY_CLAIM_DEADLINE_S,
-          text_fields: tuple = TEXT_FIELDS) -> dict:
+          text_fields: tuple = TEXT_FIELDS, first_pass=None) -> dict:
     """Check a brief against its sources: pass 1, pass 2 through `model`, spans, evidence, seal.
 
     The input brief and sources are not modified. Returns:
@@ -560,9 +622,16 @@ def judge(brief: dict, sources: dict, model, *, spans: bool = True, sharded: boo
     model call, local span placement on, the locating-quote wording off, the evidence pass on,
     completion off. completion=True is refused in this release (CompletionDisabled): the
     citation it appends would sit outside the sealed evidence record.
+
+    first_pass=None (off, the default): pass a claim_seal.jev.JevFirstPass, or "env" to read
+    the CLAIM_SEAL_JEV_* settings (still off unless CLAIM_SEAL_JEV=on), to ask Jev first. It
+    needs evidence=True. See claim_seal.jev for what is recorded and sealed.
     """
     if completion:
         raise CompletionDisabled(COMPLETION_DISABLED)
+    first_pass = resolve_first_pass(first_pass)
+    if first_pass is not None and not evidence:
+        raise ValueError("the Jev first pass needs the evidence pass: use evidence=True")
     limits.check_inputs(brief, sources)        # before the copies below, and before any model call
     doc = shape_brief(copy.deepcopy(brief), in_place=True)
     captured = capture_sources(sources)
@@ -570,8 +639,8 @@ def judge(brief: dict, sources: dict, model, *, spans: bool = True, sharded: boo
     candidates = evidence_candidates(doc, captured) if evidence else None
     holder: dict = {}
 
-    def sink(verdicts):
-        holder["claim_evidence"] = build_claim_evidence(doc, captured, verdicts)
+    def sink(verdicts, deciders=None):
+        holder["claim_evidence"] = build_claim_evidence(doc, captured, verdicts, deciders)
         return holder["claim_evidence"]
 
     rec = verify(doc, captured, receipts, model,
@@ -579,7 +648,8 @@ def judge(brief: dict, sources: dict, model, *, spans: bool = True, sharded: boo
                  locating_quote=locating_quote, claim_evidence_candidates=candidates,
                  claim_evidence_sink=sink if evidence else None,
                  completion=completion, completion_cap=completion_cap,
-                 pool_size=pool_size, claim_deadline_s=claim_deadline_s, text_fields=text_fields)
+                 pool_size=pool_size, claim_deadline_s=claim_deadline_s, text_fields=text_fields,
+                 first_pass=first_pass)
     result = {"status": overall_status(rec), "brief": doc, "verification": rec}
     if evidence:
         result["claim_evidence"] = holder.get("claim_evidence")

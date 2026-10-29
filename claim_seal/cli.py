@@ -1,7 +1,8 @@
 """claim-seal command line.
 
   claim-seal check BRIEF.json SOURCES.json [--judge replay:ANSWERS.json | --judge openai[:MODEL]]
-                   [--out RESULT.json [--force]] [--whole-brief] [--no-spans] [--no-evidence] ...
+                   [--out RESULT.json [--force]] [--whole-brief] [--no-spans] [--no-evidence]
+                   [--jev [--jev-threshold T]] ...
   claim-seal verify-seal RECORD.json [RECORD.json ...]
 
 check without --judge runs pass 1 only (are the cited references real?) and says so.
@@ -17,6 +18,7 @@ import sys
 
 from .adapters import AdapterError, OpenAICompatible, ReplayJudge
 from .completion import CompletionDisabled
+from .jev import JevFirstPass
 from .limits import InputTooLarge, load_json_file
 from .output import OutputRefused, check_out_path, write_text
 from .support import judge
@@ -72,11 +74,28 @@ def _print_report(result: dict, out, labels: dict | None = None) -> None:
       f"citations: {rec['resolution']['citations']} "
       f"(exact {rec['resolution']['exact']}, fuzzy {rec['resolution']['fuzzy']}, "
       f"unresolved {rec['resolution']['unresolved']})\n")
-    w(f"verdicts: {json.dumps(rec.get('verdicts'))}\n\n")
+    w(f"verdicts: {json.dumps(rec.get('verdicts'))}\n")
+    first = rec.get("first_pass")
+    if first:
+        cost = first.get("cost_usd")
+        w(f"jev first pass: threshold {first['settings']['threshold']:.2f}, "
+          f"decided {first['decided_by_jev']}, passed to the judge {first['passed_to_judge']}, "
+          f"fallbacks {first['fallbacks']} {json.dumps(first['fallback_reasons'])}, "
+          f"calls {first['calls']}, cost USD {cost if cost is not None else 'unreported'}, "
+          f"models {', '.join(first['models_returned']) or '-'}\n")
+    w("\n")
     for where, obj in _walk(brief):
         v = obj.get("verification") or {}
         w(f"[{where}] {v.get('verdict', '-').upper()}: {_claim_text(obj)}\n")
         w(f"    why: {v.get('why', '')}\n")
+        decided = v.get("decided_by")
+        if decided:
+            answers = ", ".join(f"{a.get('choice') or a.get('error')} {a['confidence']:.2f}"
+                                if "confidence" in a else str(a.get("error"))
+                                for a in decided.get("answers") or [])
+            w(f"    decided by: {decided['by']}"
+              + (f" ({decided['reason']})" if decided.get("reason") else "")
+              + (f"  jev: {answers}" if answers else "") + "\n")
         for n, cite in enumerate(v.get("citations") or []):
             line = f"    cite {n}: {cite['source']} / {cite['ref']!r} -> {cite['resolution']}"
             span = cite.get("span")
@@ -124,7 +143,8 @@ def _print_report(result: dict, out, labels: dict | None = None) -> None:
           f"states: {json.dumps(_tally(evidence['outcomes'], 'support_state'))}\n")
         w(f"seal: {found['algorithm']} {found['value']}  (unkeyed; tamper-evident only "
           f"alongside version history; not a signature)\n")
-        w("seal covers: the claim-evidence rows (outcome, span, verb, judge-chose flag, binding); "
+        w("seal covers: the claim-evidence rows (outcome, span, verb, judge-chose flag, binding"
+          + (", decider" if rec.get("first_pass") else "") + "); "
           "not the verdicts, sentence relations, goes-further labels, attribution flags or rule "
           "ids above\n")
         problem = seal_problem(evidence)
@@ -163,10 +183,24 @@ def cmd_check(args) -> int:
             result = {"status": "resolve-only", "brief": brief, "verification": rec}
         else:
             model = _model_from(args.judge)
+            first_pass = None
+            if args.jev or args.jev_threshold is not None:
+                if args.no_evidence:
+                    print("refused: --jev needs the evidence pass; drop --no-evidence",
+                          file=sys.stderr)
+                    return 2
+                try:
+                    first_pass = JevFirstPass.from_env(
+                        require_switch=False,
+                        **({"threshold": args.jev_threshold} if args.jev_threshold is not None else {}))
+                except ValueError as exc:
+                    print(f"refused: {exc}", file=sys.stderr)
+                    return 2
             result = judge(brief, sources, model, spans=not args.no_spans,
                            sharded=not args.whole_brief, local_placement=not args.no_local_placement,
                            evidence=not args.no_evidence, completion=args.completion,
-                           pool_size=args.pool, claim_deadline_s=args.deadline)
+                           pool_size=args.pool, claim_deadline_s=args.deadline,
+                           first_pass=first_pass)
             _print_report(result, sys.stdout,
                           {sid: e["label"] for sid, e in load_sources(sources).items()})
     except (BriefError, SourceError, AdapterError, CompletionDisabled, InputTooLarge) as exc:
@@ -253,6 +287,12 @@ def main(argv: list[str] | None = None) -> int:
     check.add_argument("--pool", type=int, default=2, help="parallel per-claim calls (default 2)")
     check.add_argument("--deadline", type=float, default=120.0,
                        help="per-claim deadline in seconds, queue wait included (default 120)")
+    check.add_argument("--jev", action="store_true",
+                       help="ask Jev first (optional first pass; key from $OPENROUTER_API_KEY or "
+                            "$CLAIM_SEAL_JEV_KEY_ENV; other settings from CLAIM_SEAL_JEV_*)")
+    check.add_argument("--jev-threshold", type=float, default=None,
+                       help="confidence at or above which Jev's answer decides (default 0.80; "
+                            "implies --jev)")
     check.set_defaults(func=cmd_check)
     verify = sub.add_parser("verify-seal", help="recompute the digest chain of sealed records")
     verify.add_argument("records", nargs="+")

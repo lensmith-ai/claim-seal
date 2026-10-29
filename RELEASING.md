@@ -29,11 +29,11 @@ publish a release, while a receipt is missing.
    installs the wheel into an empty venv, runs the demo, and writes `dist/SHA256SUMS`.
    Receipt: its last line `build-check: ... demo matched` and the `SHA256SUMS` file.
 6. **Sign an annotated tag on the released commit.**
-   `git tag -s v0.1.0 -m "claim-seal 0.1.0"` and push the tag.
-   Receipt: `git tag -v v0.1.0` reports a good signature from the owner's key.
+   `git tag -s v0.2.0 -m "claim-seal 0.2.0"` and push the tag.
+   Receipt: `git tag -v v0.2.0` reports a good signature from the owner's key.
 7. **Publish the artifacts with their checksums and a provenance attestation.**
    Attach both files and `SHA256SUMS` to the GitHub release; create an attestation for each file
    (GitHub artifact attestations, `actions/attest-build-provenance` in a release workflow, or
    `gh attestation` tooling).
-   Receipt: `gh attestation verify dist/claim_seal-0.1.0-py3-none-any.whl --repo lensmith-ai/claim-seal`
+   Receipt: `gh attestation verify dist/claim_seal-0.2.0-py3-none-any.whl --repo lensmith-ai/claim-seal`
    succeeds, and `sha256sum -c SHA256SUMS` passes on the downloaded files.

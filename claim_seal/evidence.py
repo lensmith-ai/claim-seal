@@ -303,11 +303,16 @@ def claim_ref(kind: str, item_index: int, analysis_index, claim: dict) -> dict:
             "field": field, "claim_sha256": _sha(text.encode("utf-8"))}
 
 
-def build_claim_evidence(brief: dict, sources: dict, model_verdicts: dict | None) -> dict:
+def build_claim_evidence(brief: dict, sources: dict, model_verdicts: dict | None,
+                         deciders: dict | None = None) -> dict:
     """Build the identity-only outcome rows and seal them.
 
     `model_verdicts` maps claim number (claim_units order) to the judge's parsed entry. Sources
     must carry capture digests (see capture_sources); missing or drifted digests are refused.
+
+    `deciders` (only with the optional Jev first pass, claim_seal.jev) maps claim number to the
+    decider block written into every row of that claim, inside the seal. A row of a claim Jev
+    decided records relation_source "jev-first-pass". None (the default) adds nothing.
     """
     brief = shape_brief(brief)
     sources = load_sources(sources)
@@ -342,6 +347,11 @@ def build_claim_evidence(brief: dict, sources: dict, model_verdicts: dict | None
                        "corroboration": 0, "strength": strength,
                        "evidence_spans": [], "span_counts": {"proposed": 0, "located": 0},
                        "display_policy": {"text_retained": False, "text_displayable": False}}
+            decider = deciders.get(claim_n) if deciders is not None else None
+            if decider is not None:
+                outcome["decider"] = copy.deepcopy(decider)
+                if decider.get("by") == "jev":
+                    outcome["relation_source"] = "jev-first-pass"
             raw_word = verdict.get("relation")
             if read_relation(raw_word)[1] in ("synonym", "unknown"):
                 # Added in this library: the judge's own word and how it was read, kept in the
