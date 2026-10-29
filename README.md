@@ -291,8 +291,11 @@ captured source that the judge must quote from. Jev quotes nothing, so for a cla
 supported, the located passage in the sealed row is that whole window (up to about 2,800
 characters), not one sentence; the row's `decider.section` says `evidence-window` so nobody takes
 it for a quote. Its relation is `undetermined` (Jev does not say whether the source states the
-claim or implies it), and the claim gets no per-sentence spans or goes-further labels. A cited
-source with no captured body has no window, and its claim goes to the judge. A source can try to
+claim or implies it). The claim also gets no per-sentence spans, so the goes-further check does
+not run on it: in `line_states()` every sentence of a Jev-decided item carries the claim's verdict
+at card scope, and a sentence that goes further than its source is not marked. If that check
+matters to you, keep `"supports"` out of `decide` (below). A cited source with no captured body has
+no window, and its claim goes to the judge. A source can try to
 steer Jev just as it can the judge.
 
 **What is recorded.** Each claim's `verification.decided_by`: who decided (`jev`, `judge`, or
