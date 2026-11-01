@@ -30,6 +30,7 @@ INPUTS
 from __future__ import annotations
 
 import copy
+import html
 import re
 
 MAX_SRC_CHARS = 700          # per cited item, in the verification prompt
@@ -189,8 +190,18 @@ def shape_brief(brief: dict, *, in_place: bool = False) -> dict:
     return shaped
 
 
+_TAG_RE = re.compile(r"<[^<>]*>")
+
+
 def _norm(s: str) -> str:
-    return re.sub(r"\s+", " ", (s or "")).strip().lower()
+    """The comparison form of a title or reference: entities decoded (twice, for double-escaped
+    feeds), tags removed, whitespace collapsed, lower case. Applied to both sides, so a reference
+    written "R &amp; D" or "What? <br> Data" matches an item titled "R & D" / "What? Data". It
+    only widens exact matching; an unmatched reference is still unresolved."""
+    s = s or ""
+    for _ in range(2):
+        s = _TAG_RE.sub(" ", html.unescape(s))
+    return re.sub(r"\s+", " ", s).strip().lower()
 
 
 def _tokens(s: str) -> set:

@@ -22,7 +22,12 @@ States never collapse a "could not establish" into a definite negative:
 from __future__ import annotations
 
 import copy
+from array import array
 import hashlib
+import html
+import json
+import re
+import unicodedata
 
 from .normalize import COORDINATE_SYSTEM, NORMALIZER_ID, normalize, normalizer_sha256
 from .relations import derive_coarse_relation, read_relation
@@ -43,6 +48,10 @@ EVIDENCE_WINDOW_BEHIND = 300     # a little context before the title
 EVIDENCE_WINDOW_AHEAD = 2500     # an article's body follows its title
 EVIDENCE_PROMPT_BUDGET = 90000   # total characters across every candidate in one prompt
 EVIDENCE_WINDOW_FLOOR = 600      # below this, withhold rather than offer a misleading sliver
+
+# A cited title that cannot be found in its captured document, in any written form. The judge then
+# gets no window for that citation: the document's first characters may belong to another item.
+EVIDENCE_TITLE_NOT_FOUND = "EVIDENCE-TITLE-NOT-FOUND"
 
 LINEAGE_RAW_DIGEST = "LINEAGE-RAW-DIGEST"
 LINEAGE_NORMALIZED_DIGEST = "LINEAGE-NORMALIZED-DIGEST"
@@ -155,36 +164,138 @@ def _binding(source: str, citation: dict, sources: dict):
     if (not isinstance(item.get("normalized_sha256"), str)
             or _sha(normalized.encode("utf-8")) != item["normalized_sha256"]):
         return None, "unresolved", "EVIDENCE-NORMALIZED-DIGEST"
+    # Where the judge's window starts. A document that holds only this item may fall back to its
+    # start: that is still the cited item. A document other items of the source also carry (the
+    # same captured bytes, e.g. one feed for every item) may not: its start is another item, so a
+    # title that cannot be found there is unresolved and the judge gets no window for it. A caller
+    # that attaches a shared feed body to ONE item only cannot be told apart from a one-item
+    # document; give such items their own title as it appears in the body.
+    shared = sum(1 for other in entry.get("items") or []
+                 if isinstance(other, dict) and other.get("raw_sha256") == item["raw_sha256"]) > 1
+    anchors = title_anchors(normalized, item.get("title"))
+    if not anchors:
+        if shared:
+            return None, "unresolved", EVIDENCE_TITLE_NOT_FOUND
+        anchors = [0]
     return {"response_id": str(item.get("id") or ""), "retrieved_at": item.get("retrieved_at"),
             "response_sha256": item["normalized_sha256"], "normalized": normalized,
-            "raw_title": item.get("title")}, None, None
+            "raw_title": item.get("title"), "anchors": anchors}, None, None
+
+
+# ------------------------------------------------------------------ title anchors
+# The judge's window is anchored on the cited item's title inside its captured document. A feed
+# writes a title as XML text, so "What? <br> Data" arrives as "What? &lt;br&gt; Data" and "R & D"
+# as "R &amp; D"; a numeric entity (&#10;) or CDATA changes it again. Searching for the parsed
+# title verbatim missed those, and the window used to fall back to offset 0, which in a feed is
+# the FIRST item: a claim was judged against an unrelated article. The exact written forms are
+# tried first (raw, JSON string, XML-escaped, CDATA), then the PLAIN form on both sides: CDATA
+# markers dropped, tags removed, entities decoded (twice, for double-escaped feeds), whitespace
+# collapsed. Plain offsets map back to the document. Nothing found means no window.
+_CDATA_MARK_RE = re.compile(r"<!\[CDATA\[|\]\]>")
+_TAG_RE = re.compile(r"<[^<>]*>")
+_ENTITY_RE = re.compile(r"&(?:#[0-9]+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);")
+_SPACE_RE = re.compile(r"\s+")
+
+
+def _nfc(text: str) -> str:
+    return unicodedata.normalize("NFC", text.replace("\r\n", "\n").replace("\r", "\n"))
+
+
+def _written_forms(title: str) -> list[str]:
+    """Exact forms a document may carry the title in: raw, JSON string, XML-escaped, CDATA."""
+    nfc = _nfc(title)
+    forms = [nfc]
+    for literal in (json.dumps(title, ensure_ascii=True)[1:-1], json.dumps(title, ensure_ascii=False)[1:-1],
+                    html.escape(nfc, quote=False)):
+        if literal not in forms:
+            forms.append(literal)
+    forms.append(f"<![CDATA[{nfc}]]>")
+    return forms
+
+
+def _rewrite_mapped(text: str, offsets, pattern, repl):
+    out, out_offsets, pos = [], array("q"), 0
+    for m in pattern.finditer(text):
+        out.append(text[pos:m.start()])
+        out_offsets.extend(offsets[pos:m.start()])
+        new = repl(m)
+        out.append(new)
+        out_offsets.extend([offsets[m.start()]] * len(new))
+        pos = m.end()
+    out.append(text[pos:])
+    out_offsets.extend(offsets[pos:])
+    return "".join(out), out_offsets
+
+
+def _plain_mapped(text: str):
+    """(plain text, offset in `text` of each plain character; an int array, not a list, so a
+    multi-megabyte page costs 8 bytes per character rather than an int object each)."""
+    offsets = array("q", range(len(text)))
+    for pattern, repl in ((_CDATA_MARK_RE, lambda m: ""), (_TAG_RE, lambda m: " "),
+                          (_ENTITY_RE, lambda m: html.unescape(m.group(0))), (_TAG_RE, lambda m: " "),
+                          (_ENTITY_RE, lambda m: html.unescape(m.group(0))), (_TAG_RE, lambda m: " "),
+                          (_SPACE_RE, lambda m: " ")):
+        text, offsets = _rewrite_mapped(text, offsets, pattern, repl)
+    return text, offsets
+
+
+def plain_title(title) -> str:
+    """A title in the plain form both sides are compared in."""
+    if not isinstance(title, str):
+        return ""
+    return _plain_mapped(_nfc(title))[0].strip()
+
+
+def title_anchors(normalized: str, title, limit: int = 6) -> list[int]:
+    """Offsets in the document where the title starts: exact written forms first, then the plain
+    form. An empty list means NOT FOUND; never substitute another offset for it."""
+    if not isinstance(title, str) or not title.strip():
+        return []
+    for needle in _written_forms(title):
+        starts, i = [], normalized.find(needle)
+        while i >= 0 and len(starts) < limit:
+            starts.append(i)
+            i = normalized.find(needle, i + 1)
+        if starts:
+            return starts
+    want = plain_title(title)
+    if not want:
+        return []
+    plain, offsets = _plain_mapped(normalized)
+    starts, i = [], plain.find(want)
+    while i >= 0 and len(starts) < limit:
+        starts.append(offsets[i])
+        i = plain.find(want, i + 1)
+    return starts
+
+
+def best_anchor(normalized: str, starts, behind: int, ahead: int) -> int:
+    """The anchor whose window carries the least markup (see evidence_window)."""
+    def markup_share(ix: int) -> float:
+        w = normalized[max(0, ix - behind):min(len(normalized), ix + ahead)]
+        return (w.count("<") + w.count(">")) / max(1, len(w))
+
+    return min(starts, key=markup_share)
 
 
 # ------------------------------------------------------------------ judge windows
-def evidence_window(normalized: str, raw_title, behind: int, ahead: int) -> str:
+def evidence_window(normalized: str, raw_title, behind: int, ahead: int, anchors=None) -> str:
     """A slice of norm/v1 anchored on the title occurrence whose window is most PROSE-like.
 
     An HTML document carries its title at least twice: in <title> (surrounded by head markup) and
     in the body heading (surrounded by the article). Anchoring on the FIRST find handed the judge
     the head's markup. Candidates are scored by markup density and the cleanest window wins; a
     plain-text document has one occurrence and behaves exactly as before.
+
+    The title is found in any written form (see title_anchors); `anchors` passes offsets already
+    found. A title that is not found gives an EMPTY window, never the document's first characters:
+    in a feed those belong to another item.
     """
-    starts = []
-    if isinstance(raw_title, str) and raw_title:
-        i = normalized.find(raw_title)
-        while i >= 0 and len(starts) < 6:
-            starts.append(i)
-            i = normalized.find(raw_title, i + 1)
+    starts = list(anchors) if anchors else title_anchors(normalized, raw_title)
     if not starts:
-        starts = [0]
-
-    def window(ix: int) -> str:
-        return normalized[max(0, ix - behind):min(len(normalized), ix + ahead)]
-
-    def markup_share(w: str) -> float:
-        return (w.count("<") + w.count(">")) / max(1, len(w))
-
-    return window(min(starts, key=lambda ix: markup_share(window(ix))))
+        return ""
+    ix = best_anchor(normalized, starts, behind, ahead)
+    return normalized[max(0, ix - behind):min(len(normalized), ix + ahead)]
 
 
 def evidence_candidates(brief: dict, sources: dict, *, enabled: bool = True) -> dict:
@@ -214,8 +325,10 @@ def evidence_candidates(brief: dict, sources: dict, *, enabled: bool = True) -> 
         behind = max(0, round(room * behind / per))
         ahead = room - behind
     for key, binding in bindings.items():
-        candidates[key] = evidence_window(binding["normalized"], binding.get("raw_title"),
-                                          behind, ahead)
+        window = evidence_window(binding["normalized"], binding.get("raw_title"), behind, ahead,
+                                 binding.get("anchors"))
+        if window:
+            candidates[key] = window
     return candidates
 
 

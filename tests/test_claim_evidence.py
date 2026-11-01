@@ -99,6 +99,16 @@ class ClaimEvidenceTests(unittest.TestCase):
         sc["feed"]["items"][0]["body"] = None
         self.assertEqual(outcome(build(sc=sc)), ("unknown", "EVIDENCE-FETCH-FAILED"))
 
+    def test_a_title_absent_from_a_shared_document_is_unresolved_not_another_items_text(self):
+        # Two items carry the same captured bytes (one feed); the cited title is not in it. The
+        # window used to fall back to offset 0, another item's text. Now there is no binding.
+        sc = sources(body="Other Title. Synthetic evidence.", refs=("Synthetic Title", "Other Title"))
+        self.assertEqual(outcome(build(sc=sc)), ("unresolved", "EVIDENCE-TITLE-NOT-FOUND"))
+        self.assertEqual(evidence_candidates(brief(), sc), {})
+        # the same document held by the cited item alone is still that item: the head is allowed
+        alone = sources(body="Synthetic evidence.")
+        self.assertEqual(outcome(build(sc=alone)), ("supported", "EVIDENCE-SPANS-LOCATED"))
+
     def test_uncited_source_is_unknown(self):
         self.assertEqual(outcome(build(sc={})), ("unknown", "EVIDENCE-NO-BODY"))
         sc = sources()
@@ -309,8 +319,11 @@ class SpanExtensionTests(unittest.TestCase):
 class SealTests(unittest.TestCase):
     def two_row_record(self):
         first, second = "First premise.", "Second premise."
+        # both items share this document, so each title must appear in it (an unfound title in a
+        # shared document gets no window: EVIDENCE-TITLE-NOT-FOUND)
         return build(doc=brief(refs=("Synthetic Title", "Second Title")),
-                     sc=sources(body=first + " " + second, refs=("Synthetic Title", "Second Title")),
+                     sc=sources(body=f"Synthetic Title. {first} Second Title. {second}",
+                                refs=("Synthetic Title", "Second Title")),
                      verdicts={0: {"verdict": "partial", "relation": "illustrates", "evidence_spans": [
                          {"citation_index": 0, "support_span": first},
                          {"citation_index": 1, "support_span": second}]}})
@@ -417,9 +430,15 @@ class JudgeWindowTests(unittest.TestCase):
 
     def test_total_stays_within_the_prompt_budget_as_citations_multiply(self):
         refs = tuple(f"Title {n}" for n in range(60))
-        big = '{"title":"Title 0","body":"' + "filler " * 5000 + '"}'
-        total = sum(len(v) for v in evidence_candidates(brief(refs=refs), sources(body=big, refs=refs)).values())
-        self.assertLessEqual(total, 110000)
+        # one document per item, each carrying its own title: sixty items sharing ONE document that
+        # names only "Title 0" would leave 59 titles unfound and windowless, and the budget guard
+        # unexercised
+        items = [{"id": f"feed-{n + 1}", "title": r, "text": "parsed text", "url": f"https://example.test/{n + 1}",
+                  "body": '{"title":"' + r + '","body":"' + "filler " * 5000 + '"}', "retrieved_at": FETCHED_AT}
+                 for n, r in enumerate(refs)]
+        cands = evidence_candidates(brief(refs=refs), capture_sources({"feed": {"label": "Feed", "items": items}}))
+        self.assertEqual(len(cands), 60)
+        self.assertLessEqual(sum(len(v) for v in cands.values()), 110000)
 
     def test_window_anchors_on_the_title_not_the_head_of_the_document(self):
         body = '{"lead":"' + "x" * 50000 + '","title":"Synthetic Title","body":"Synthetic evidence."}'
@@ -431,8 +450,11 @@ class JudgeWindowTests(unittest.TestCase):
         body = "<h1>Big News</h1> The first sentence states the claim plainly. More prose here."
         self.assertIn("first sentence states the claim", evidence_window(head + body, "Big News", 40, 80))
 
-    def test_missing_title_falls_back_to_the_head(self):
-        self.assertEqual(evidence_window("abcdef" * 50, None, 10, 30), ("abcdef" * 50)[:30])
+    def test_missing_title_gives_no_window_unless_the_binding_allows_the_head(self):
+        # a direct call cannot know whether the document holds other items, so it never guesses;
+        # the binding passes anchors=[0] only for a document no other item shares
+        self.assertEqual(evidence_window("abcdef" * 50, None, 10, 30), "")
+        self.assertEqual(evidence_window("abcdef" * 50, None, 10, 30, anchors=[0]), ("abcdef" * 50)[:30])
 
     def test_disabled_pass_offers_no_windows(self):
         self.assertEqual(evidence_candidates(brief(), sources(), enabled=False), {})
