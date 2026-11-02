@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import copy
 from array import array
+import functools
 import hashlib
 import html
 import json
@@ -48,6 +49,16 @@ EVIDENCE_WINDOW_BEHIND = 300     # a little context before the title
 EVIDENCE_WINDOW_AHEAD = 2500     # an article's body follows its title
 EVIDENCE_PROMPT_BUDGET = 90000   # total characters across every candidate in one prompt
 EVIDENCE_WINDOW_FLOOR = 600      # below this, withhold rather than offer a misleading sliver
+#
+# THE WINDOW STOPS AT THE CITED ARTICLE'S OWN END. BEHIND and AHEAD are the most the judge reads;
+# the window is also clipped to the article its anchor sits in (article_bounds below). Unclipped, a
+# feed item whose own text is short ran on into the NEXT item of the same feed, and the judge backed
+# a citation of the short item with a sentence from the next article; the characters behind could
+# likewise reach the PREVIOUS item. The clip is a slice of norm/v1 like the window, so a quoted span
+# still maps to the same digest-pinned bytes. A short article gives a short window that is the WHOLE
+# article, not a budget sliver, so the FLOOR (a per-citation budget rule) is unchanged. A judge quote
+# located only outside the cited article is not evidence for that citation: it counts as not located
+# (build_claim_evidence).
 
 # A cited title that cannot be found in its captured document, in any written form. The judge then
 # gets no window for that citation: the document's first characters may belong to another item.
@@ -272,10 +283,78 @@ def title_anchors(normalized: str, title, limit: int = 6) -> list[int]:
 def best_anchor(normalized: str, starts, behind: int, ahead: int) -> int:
     """The anchor whose window carries the least markup (see evidence_window)."""
     def markup_share(ix: int) -> float:
-        w = normalized[max(0, ix - behind):min(len(normalized), ix + ahead)]
+        lo, hi = _window_span(normalized, ix, behind, ahead)
+        w = normalized[lo:hi]
         return (w.count("<") + w.count(">")) / max(1, len(w))
 
     return min(starts, key=markup_share)
+
+
+def _window_span(normalized: str, ix: int, behind: int, ahead: int) -> tuple[int, int]:
+    """[lo, hi) of the judge's window at anchor ix: BEHIND/AHEAD, clipped to the cited article."""
+    lo, hi = article_bounds(normalized, ix)
+    return max(lo, ix - behind), min(hi, ix + ahead)
+
+
+# ------------------------------------------------------------------ article bounds
+# norm/v1 keeps every tag, so an article's edges are read from the markup, in this order:
+#   feed  the innermost <item>...</item> or <entry>...</entry> holding the anchor;
+#   HTML  else the innermost <article>...</article> holding it;
+#         else, when the anchor sits inside an <hN> heading, from that heading's start to the next
+#         heading of the same or a higher level (<h1>..<hN>), or the end of the text.
+# An anchor in none of these (plain text, JSON, an HTML <title>) is not clipped: (0, len).
+# Deterministic: tag names are matched case-insensitively, an element closes at its matching close
+# tag (nesting counted), an unclosed or self-closed element bounds nothing.
+_FEED_ELEMENT_RE = re.compile(r"<(/?)(item|entry)(?=[\s>/])", re.IGNORECASE)
+_ARTICLE_ELEMENT_RE = re.compile(r"<(/?)(article)(?=[\s>/])", re.IGNORECASE)
+_HEADING_OPEN_RE = re.compile(r"<h([1-6])(?=[\s>/])", re.IGNORECASE)
+
+
+def _element_ranges(text: str, pattern) -> list[tuple[int, int]]:
+    out, stack = [], []
+    for m in pattern.finditer(text):
+        name = m.group(2).lower()
+        if m.group(1):
+            if stack and stack[-1][1] == name:
+                lo = stack.pop()[0]
+                gt = text.find(">", m.end())
+                out.append((lo, len(text) if gt < 0 else gt + 1))
+            continue
+        gt = text.find(">", m.end())
+        if gt >= 0 and text[gt - 1] == "/":
+            continue                    # <item/> holds nothing
+        stack.append((m.start(), name))
+    return out
+
+
+def _heading_ranges(text: str) -> list[tuple[int, int, int]]:
+    out = []
+    for m in _HEADING_OPEN_RE.finditer(text):
+        close = re.compile(rf"</h{m.group(1)}\s*>", re.IGNORECASE).search(text, m.end())
+        if close:
+            out.append((m.start(), close.end(), int(m.group(1))))
+    return out
+
+
+@functools.lru_cache(maxsize=16)
+def _boundaries(text: str):
+    """Element ranges of one document, computed once per document, not once per anchor."""
+    return (_element_ranges(text, _FEED_ELEMENT_RE), _element_ranges(text, _ARTICLE_ELEMENT_RE),
+            _heading_ranges(text))
+
+
+def article_bounds(text: str, ix: int) -> tuple[int, int]:
+    """[lo, hi) of the article the offset ix sits in (see the block above); (0, len) if none."""
+    feed, articles, headings = _boundaries(text)
+    for ranges in (feed, articles):
+        holding = [r for r in ranges if r[0] <= ix < r[1]]
+        if holding:
+            return min(holding, key=lambda r: r[1] - r[0])
+    for start, end, level in headings:
+        if start <= ix < end:
+            nxt = next((s for s, _e, lv in headings if s >= end and lv <= level), len(text))
+            return start, nxt
+    return 0, len(text)
 
 
 # ------------------------------------------------------------------ judge windows
@@ -289,13 +368,15 @@ def evidence_window(normalized: str, raw_title, behind: int, ahead: int, anchors
 
     The title is found in any written form (see title_anchors); `anchors` passes offsets already
     found. A title that is not found gives an EMPTY window, never the document's first characters:
-    in a feed those belong to another item.
+    in a feed those belong to another item. The window ends at the cited article's own end (see
+    article_bounds).
     """
     starts = list(anchors) if anchors else title_anchors(normalized, raw_title)
     if not starts:
         return ""
     ix = best_anchor(normalized, starts, behind, ahead)
-    return normalized[max(0, ix - behind):min(len(normalized), ix + ahead)]
+    lo, hi = _window_span(normalized, ix, behind, ahead)
+    return normalized[lo:hi]
 
 
 def evidence_candidates(brief: dict, sources: dict, *, enabled: bool = True) -> dict:
@@ -520,6 +601,14 @@ def build_claim_evidence(brief: dict, sources: dict, model_verdicts: dict | None
                     failures.append("ambiguous")
                 else:
                     start, end, extension = located
+                    # The quote itself (before any disambiguating extension) must sit inside the
+                    # cited article: a sentence found only in the next item is not this citation's
+                    # evidence, whatever the judge said (see EVIDENCE_WINDOW_FLOOR's note).
+                    core = (start + extension["before_codepoints"], end - extension["after_codepoints"])
+                    if not any(lo <= core[0] and core[1] <= hi for lo, hi in
+                               (article_bounds(binding["normalized"], a) for a in binding["anchors"])):
+                        failures.append("not-located")
+                        continue
                     located_text = binding["normalized"][start:end]
                     evidence_span = {
                         "normalizer": NORMALIZER_ID, "coordinate_system": COORDINATE_SYSTEM,
