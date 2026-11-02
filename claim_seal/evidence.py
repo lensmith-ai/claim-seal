@@ -190,7 +190,7 @@ def _binding(source: str, citation: dict, sources: dict):
         anchors = [0]
     return {"response_id": str(item.get("id") or ""), "retrieved_at": item.get("retrieved_at"),
             "response_sha256": item["normalized_sha256"], "normalized": normalized,
-            "raw_title": item.get("title"), "anchors": anchors}, None, None
+            "raw_title": item.get("title"), "anchors": anchors, "shared": shared}, None, None
 
 
 # ------------------------------------------------------------------ title anchors
@@ -280,19 +280,19 @@ def title_anchors(normalized: str, title, limit: int = 6) -> list[int]:
     return starts
 
 
-def best_anchor(normalized: str, starts, behind: int, ahead: int) -> int:
+def best_anchor(normalized: str, starts, behind: int, ahead: int, headings: bool = True) -> int:
     """The anchor whose window carries the least markup (see evidence_window)."""
     def markup_share(ix: int) -> float:
-        lo, hi = _window_span(normalized, ix, behind, ahead)
+        lo, hi = _window_span(normalized, ix, behind, ahead, headings)
         w = normalized[lo:hi]
         return (w.count("<") + w.count(">")) / max(1, len(w))
 
     return min(starts, key=markup_share)
 
 
-def _window_span(normalized: str, ix: int, behind: int, ahead: int) -> tuple[int, int]:
+def _window_span(normalized: str, ix: int, behind: int, ahead: int, headings: bool = True) -> tuple[int, int]:
     """[lo, hi) of the judge's window at anchor ix: BEHIND/AHEAD, clipped to the cited article."""
-    lo, hi = article_bounds(normalized, ix)
+    lo, hi = article_bounds(normalized, ix, headings)
     return max(lo, ix - behind), min(hi, ix + ahead)
 
 
@@ -301,7 +301,10 @@ def _window_span(normalized: str, ix: int, behind: int, ahead: int) -> tuple[int
 #   feed  the innermost <item>...</item> or <entry>...</entry> holding the anchor;
 #   HTML  else the innermost <article>...</article> holding it;
 #         else, when the anchor sits inside an <hN> heading, from that heading's start to the next
-#         heading of the same or a higher level (<h1>..<hN>), or the end of the text.
+#         heading of the same or a higher level (<h1>..<hN>), or the end of the text. The heading
+#         rule applies only to a response several items share (an index page): a page that holds
+#         ONLY the cited article may use its title's heading level for its own sections, and there
+#         is no next article to run into.
 # An anchor in none of these (plain text, JSON, an HTML <title>) is not clipped: (0, len).
 # Deterministic: tag names are matched case-insensitively, an element closes at its matching close
 # tag (nesting counted), an unclosed or self-closed element bounds nothing.
@@ -343,22 +346,23 @@ def _boundaries(text: str):
             _heading_ranges(text))
 
 
-def article_bounds(text: str, ix: int) -> tuple[int, int]:
+def article_bounds(text: str, ix: int, headings: bool = True) -> tuple[int, int]:
     """[lo, hi) of the article the offset ix sits in (see the block above); (0, len) if none."""
-    feed, articles, headings = _boundaries(text)
+    feed, articles, heads = _boundaries(text)
     for ranges in (feed, articles):
         holding = [r for r in ranges if r[0] <= ix < r[1]]
         if holding:
             return min(holding, key=lambda r: r[1] - r[0])
-    for start, end, level in headings:
+    for start, end, level in (heads if headings else ()):
         if start <= ix < end:
-            nxt = next((s for s, _e, lv in headings if s >= end and lv <= level), len(text))
+            nxt = next((s for s, _e, lv in heads if s >= end and lv <= level), len(text))
             return start, nxt
     return 0, len(text)
 
 
 # ------------------------------------------------------------------ judge windows
-def evidence_window(normalized: str, raw_title, behind: int, ahead: int, anchors=None) -> str:
+def evidence_window(normalized: str, raw_title, behind: int, ahead: int, anchors=None,
+                    headings: bool = True) -> str:
     """A slice of norm/v1 anchored on the title occurrence whose window is most PROSE-like.
 
     An HTML document carries its title at least twice: in <title> (surrounded by head markup) and
@@ -374,8 +378,8 @@ def evidence_window(normalized: str, raw_title, behind: int, ahead: int, anchors
     starts = list(anchors) if anchors else title_anchors(normalized, raw_title)
     if not starts:
         return ""
-    ix = best_anchor(normalized, starts, behind, ahead)
-    lo, hi = _window_span(normalized, ix, behind, ahead)
+    ix = best_anchor(normalized, starts, behind, ahead, headings)
+    lo, hi = _window_span(normalized, ix, behind, ahead, headings)
     return normalized[lo:hi]
 
 
@@ -407,7 +411,7 @@ def evidence_candidates(brief: dict, sources: dict, *, enabled: bool = True) -> 
         ahead = room - behind
     for key, binding in bindings.items():
         window = evidence_window(binding["normalized"], binding.get("raw_title"), behind, ahead,
-                                 binding.get("anchors"))
+                                 binding.get("anchors"), headings=binding.get("shared", True))
         if window:
             candidates[key] = window
     return candidates
@@ -457,16 +461,22 @@ def _all_occurrences(text: str, needle: str) -> list[int]:
     return starts
 
 
-def _extend_ambiguous_span(normalized: str, proposed: str) -> tuple[int, int, dict] | None:
+def _extend_ambiguous_span(normalized: str, proposed: str, within=None) -> tuple[int, int, dict] | None:
     """Locate one unique same-document superset, or refuse without choosing an occurrence."""
     occurrences = _all_occurrences(normalized, proposed)
-    if len(occurrences) == 1:
+    every = len(occurrences)
+    if within is not None:
+        # only an occurrence inside the cited article can be this citation's evidence; the
+        # extension below still has to make it unique in the WHOLE document
+        occurrences = [o for o in occurrences
+                       if any(lo <= o and o + len(proposed) <= hi for lo, hi in within)]
+    if every == 1 and len(occurrences) == 1:
         start = occurrences[0]
         return start, start + len(proposed), {"applied": False,
                                                 "proposed_sha256": _sha(proposed.encode("utf-8")),
                                                 "proposed_codepoints": len(proposed),
                                                 "before_codepoints": 0, "after_codepoints": 0}
-    if len(occurrences) < 2:
+    if not occurrences or every < 2:
         return None
     for total in range(1, EVIDENCE_SPAN_EXTENSION_MAX_CODEPOINTS + 1):
         unique: list[tuple[int, int, dict]] = []
@@ -594,21 +604,19 @@ def build_claim_evidence(brief: dict, sources: dict, model_verdicts: dict | None
                 if not isinstance(span, str) or not span:
                     failures.append("not-proposed")
                     continue
-                located = _extend_ambiguous_span(binding["normalized"], span)
-                if not _all_occurrences(binding["normalized"], span):
+                # The quote must sit inside the cited article: a sentence found only in the next
+                # item is not this citation's evidence, whatever the judge said, and counts as not
+                # located (see EVIDENCE_WINDOW_FLOOR's note).
+                within = [article_bounds(binding["normalized"], a, binding.get("shared", True))
+                          for a in binding["anchors"]]
+                located = _extend_ambiguous_span(binding["normalized"], span, within)
+                if not any(lo <= o and o + len(span) <= hi for o in _all_occurrences(binding["normalized"], span)
+                           for lo, hi in within):
                     failures.append("not-located")
                 elif located is None:
                     failures.append("ambiguous")
                 else:
                     start, end, extension = located
-                    # The quote itself (before any disambiguating extension) must sit inside the
-                    # cited article: a sentence found only in the next item is not this citation's
-                    # evidence, whatever the judge said (see EVIDENCE_WINDOW_FLOOR's note).
-                    core = (start + extension["before_codepoints"], end - extension["after_codepoints"])
-                    if not any(lo <= core[0] and core[1] <= hi for lo, hi in
-                               (article_bounds(binding["normalized"], a) for a in binding["anchors"])):
-                        failures.append("not-located")
-                        continue
                     located_text = binding["normalized"][start:end]
                     evidence_span = {
                         "normalizer": NORMALIZER_ID, "coordinate_system": COORDINATE_SYSTEM,

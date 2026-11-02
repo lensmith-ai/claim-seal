@@ -146,6 +146,28 @@ class HtmlArticleElementEndTests(_ArticleEndCases, unittest.TestCase):
     BODY = HTML_ARTICLES
 
 
+class QuoteAndSingleArticleTests(unittest.TestCase):
+    def test_a_quote_also_found_in_another_item_is_located_in_the_cited_one(self):
+        body = RSS.replace(f"<description>{NEXT_ONLY} ", f"<description>{NEXT_ONLY} {SHORT_OWN} ")
+        record = build_claim_evidence(brief(TITLE_SHORT), shared_sources(body), supported_by(SHORT_OWN))
+        (row,) = record["outcomes"]
+        self.assertEqual(row["support_state"], "supported")
+        (span,) = row["evidence_spans"]
+        lo, hi = ev.article_bounds(body, body.index(TITLE_SHORT))
+        self.assertTrue(lo <= span["start"] and span["end"] <= hi, "the span was placed outside the cited item")
+        self.assertIn(SHORT_OWN, body[span["start"]:span["end"]])
+
+    def test_a_page_holding_only_the_cited_article_keeps_its_same_level_sections(self):
+        body = (f"<html><head><title>Synthetic lab</title></head><body><h2>{TITLE_SHORT}</h2><p>Intro.</p>"
+                f"<h2>Results</h2><p>{SHORT_OWN}</p></body></html>")
+        sources = capture_sources({"lab": {"label": "Lab", "items": [
+            {"id": "page-1", "key": TITLE_SHORT, "title": TITLE_SHORT, "text": "parsed text", "body": body,
+             "url": "https://example.test/1", "retrieved_at": FETCHED_AT}]}})
+        self.assertIn(SHORT_OWN, evidence_candidates(brief(TITLE_SHORT), sources)[(0, 0)])
+        record = build_claim_evidence(brief(TITLE_SHORT), sources, supported_by(SHORT_OWN))
+        self.assertEqual(record["outcomes"][0]["support_state"], "supported")
+
+
 class UnboundedShapesTests(unittest.TestCase):
     """What the clip leaves alone."""
 
