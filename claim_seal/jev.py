@@ -3,7 +3,7 @@
 With a first pass, each checkable claim is first put to Jev, a small classifier served on
 OpenRouter's decisions endpoint, once per cited source: does this source section support the
 claim, contradict it, or say nothing about it? Jev answers with one of the three and a
-confidence.
+probability.
 
 SHADOW (the default once on, and the recommended use): Jev's answers are recorded beside the
 judge's, the judge decides every claim exactly as without a first pass, and the run record counts
@@ -11,7 +11,7 @@ where Jev would have decided and whether it agreed. Jev has no "partial" answer;
 briefs, where the judge calls most claims partial, Jev said "supports" to many of them.
 
 DECIDING ("cascade", opt in with decide=...): when every cited source of a claim is answered at or
-above the threshold, the answers do not disagree with each other, and the claim-level answer is in
+above the threshold (a probability, see below), the answers do not disagree with each other, and the claim-level answer is in
 `decide`, Jev's answer decides the claim and the judge is not called for it. Every other claim
 goes to the judge, exactly as without a first pass.
 
@@ -39,6 +39,16 @@ THE MAPPING to claim-seal's words:
 Several citations: all says_nothing -> unsupported; contradicts with no supports -> unsupported
 (contradicts); supports with no contradicts -> supported; supports AND contradicts -> the judge.
 
+THE PROBABILITY. The threshold is read against P(choice): the endpoint's own `probabilities` entry for
+the answer it gave (`probabilities.supports` for "supports"). The reply's `confidence` field is NOT
+that number. It is the probability rescaled so that a uniform answer is 0 and a certain one is 1,
+(K*P - 1) / (K - 1) for K answers (K = 3 here; for a yes/no question it is |p_yes - p_no|), so
+`confidence` 0.80 is P(choice) 0.867 and reading it as a probability understates every answer.
+A reply with no usable probabilities block (a missing key, a value outside 0..1, values that do
+not sum to one within rounding, or an answer that is not the largest) falls back to the same
+rescale inverted, P = (confidence * (K - 1) + 1) / K, and the answer is marked
+probability_basis = "confidence-margin" (counted in the run record) instead of "probabilities".
+
 FAILURE. A missing key, an HTTP error, a timeout, a redirect, an oversized or malformed reply: that
 claim goes to the normal judge, and the fallback is counted by reason in the run record. A Jev
 failure never fails a claim and never marks one supported.
@@ -59,6 +69,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import math
 import os
 import time
 import urllib.error
@@ -82,6 +93,9 @@ DEFAULT_PROVIDER = {"allow_fallbacks": False, "data_collection": "deny", "zdr": 
                     "max_price": {"prompt": "10.0", "completion": "0"}}
 
 CHOICES = ("supports", "contradicts", "says_nothing")
+PROB_TOLERANCE = 0.05          # the endpoint rounds each probability to two decimals
+BASIS_PROBABILITIES = "probabilities"
+BASIS_MARGIN = "confidence-margin"
 # The question, word for word as it was measured. Changing it changes the answers.
 QUESTION_ID = "relation"
 QUESTION = {
@@ -121,6 +135,23 @@ def _check_threshold(value) -> float:
     return value
 
 
+def read_probability(answer: dict, choice: str, confidence: float) -> tuple[float, str]:
+    """(P(choice), basis). P comes from the reply's own `probabilities` block when it is usable
+    (every choice present, each a finite number in 0..1, the sum within PROB_TOLERANCE of one, and
+    the answer given is a largest entry); otherwise it is the rescale inverted from `confidence`,
+    marked probability_basis = "confidence-margin". `confidence` is never used as P directly."""
+    block = answer.get("probabilities") if isinstance(answer, dict) else None
+    if isinstance(block, dict) and all(c in block for c in CHOICES):
+        values = [block[c] for c in CHOICES]
+        if all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+               and 0.0 <= v <= 1.0 for v in values):
+            if (abs(sum(values) - 1.0) <= PROB_TOLERANCE
+                    and float(block[choice]) >= max(float(v) for v in values) - 1e-9):
+                return float(block[choice]), BASIS_PROBABILITIES
+    k = len(CHOICES)
+    return min(1.0, max(0.0, (float(confidence) * (k - 1) + 1.0) / k)), BASIS_MARGIN
+
+
 def _https_transport(endpoint: str, body: bytes, headers: dict, timeout: float) -> bytes:
     """POST once, redirects refused (the same opener as OpenAICompatible), reply size bounded."""
     from .adapters import AdapterError, _open  # local: adapters imports support
@@ -152,7 +183,8 @@ def _https_transport(endpoint: str, body: bytes, headers: dict, timeout: float) 
 class JevFirstPass:
     """Settings for the first pass. Pass an instance to judge(first_pass=...).
 
-    threshold      a Jev answer decides only at or above this confidence (default 0.80)
+    threshold      a Jev answer counts (and may decide) only at or above this probability, P(choice)
+                   from the reply's `probabilities` block, never the `confidence` field (default 0.80)
     model          model id sent to the endpoint (default typesafe/jev-1.14-20261014, the
                    measured snapshot; the id that actually answered is recorded on every answer)
     endpoint       default https://openrouter.ai/api/alpha/decisions; https only (plain http only
@@ -264,8 +296,10 @@ class JevFirstPass:
         return json.dumps(body, ensure_ascii=False, sort_keys=True).encode("utf-8")
 
     def ask(self, key: str, claim: str, section: str) -> dict:
-        """One Jev answer: {choice, confidence, model, cost_usd, latency_s, request_id}, or a
-        JevError. The key goes into one header and nowhere else."""
+        """One Jev answer: {choice, confidence, probability, probability_basis, model, cost_usd,
+        latency_s, request_id}, or a JevError. `confidence` is the endpoint's rescaled margin and is
+        only recorded; `probability` is P(choice) (see read_probability) and is what the threshold
+        reads. The key goes into one header and nowhere else."""
         started = time.monotonic()
         raw = self.transport(self.endpoint, self.request_body(claim, section),
                              {"Authorization": "Bearer " + key}, self.timeout_s)
@@ -286,7 +320,9 @@ class JevFirstPass:
         cost = float(cost) if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None
         model = doc.get("model")
         request_id = doc.get("id")
+        probability, basis = read_probability(answer, choice, float(confidence))
         return {"choice": choice, "confidence": float(confidence),
+                "probability": round(probability, 6), "probability_basis": basis,
                 "model": model if isinstance(model, str) else None,
                 "cost_usd": cost, "latency_s": latency,
                 "request_id": request_id if isinstance(request_id, str) else None}
@@ -343,7 +379,7 @@ class JevFirstPass:
         errors = sorted({a["error"] for a in answers if "error" in a})
         if errors:
             return {"by": "judge", "reason": "fallback:" + errors[0], "answers": answers}
-        if any(a["confidence"] < self.threshold for a in answers):
+        if any(a["probability"] < self.threshold for a in answers):
             return {"by": "judge", "reason": "below-threshold", "answers": answers}
         choices = {a["choice"] for a in answers}
         if "supports" in choices and "contradicts" in choices:
@@ -389,6 +425,7 @@ class JevFirstPass:
             "fallback_reasons": fallbacks,
             "calls": len(answers),
             "call_errors": errors,
+            "probability_from_margin": sum(1 for a in ok if a.get("probability_basis") == BASIS_MARGIN),
             "cost_usd": round(sum(costs), 9) if costs else (0.0 if not ok else None),
             "cost_unreported_calls": len(ok) - len(costs),
             "latency_s": ({"p50": latencies[len(latencies) // 2], "max": latencies[-1]}
@@ -401,12 +438,12 @@ class JevFirstPass:
         """The judge-shaped verdict entry for a claim Jev decided."""
         verdict, relation = VERDICT_BY_CHOICE[decision["choice"]]
         answers = decision["answers"]
-        lowest = min(a["confidence"] for a in answers)
+        lowest = min(a["probability"] for a in answers)
         entry = {"verdict": verdict, "relation": relation,
                  "why": (f"decided by the Jev first pass: {decision['choice']} for "
                          + ("each of the " + str(len(answers)) + " cited sources"
                             if len(answers) > 1 else "the cited source")
-                         + f" (lowest confidence {lowest:.2f}, threshold {self.threshold:.2f})")[:200]}
+                         + f" (lowest probability {lowest:.2f}, threshold {self.threshold:.2f})")[:200]}
         if spans:
             entry["citation_spans"] = []
         if verdict == "supported":
@@ -429,7 +466,8 @@ class JevFirstPass:
         out = {"by": decision["by"], "reason": decision["reason"], "first_pass": FIRST_PASS_CONTRACT,
                "mode": self.mode, "threshold": self.threshold,
                "jev_choice": decision.get("jev_choice"),
-               "answers": [{k: a.get(k) for k in ("citation_index", "choice", "confidence", "model")}
+               "answers": [{k: a.get(k) for k in ("citation_index", "choice", "confidence", "probability",
+                                                  "probability_basis", "model")}
                            if "error" not in a else {"citation_index": a["citation_index"],
                                                      "error": a["error"]}
                            for a in decision["answers"]]}

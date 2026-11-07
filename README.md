@@ -5,7 +5,7 @@
 > **AI;DR (AI, didn't read)**
 > Claude wrote this code and this README. I haven't read either, and I can't explain or test it line by line myself.
 > What I have done: claim-seal checks every brief my briefing tool writes, and a second daily brief. I routinely click through to the cited sources by hand, to see that what a claim says is really in the source, and that when a claim goes further, the going further is real. That's often the point, since claims built on plausible implication are the ones people follow. Everything I've checked has held up.
-> 333 automated tests pass, an independent AI reviewer compared this README against the code before release, and the problems an independent AI security review found are fixed, each with a test ([what changed](#what-changed-after-the-security-review)). Treat it as a working experiment, and open an issue if something's off ([how](CONTRIBUTING.md)). (Arya)
+> 368 automated tests pass, an independent AI reviewer compared this README against the code before release, and the problems an independent AI security review found are fixed, each with a test ([what changed](#what-changed-after-the-security-review)). Treat it as a working experiment, and open an issue if something's off ([how](CONTRIBUTING.md)). (Arya)
 > The [Jev first pass](#jev-first-pass-optional) is new and off unless you turn it on; when on, it only records Jev's answers beside the judge's unless you also let it decide. Its numbers come from two measurements (200 human-labelled pairs, and 140 real claims compared with claim-seal's own verdicts), not from my own checks of real briefs. On the real claims it disagreed with claim-seal on most claims claim-seal calls partial.
 
 **Where it stands (2026-10-26).** Since the evening of 2026-10-25 (UTC), every brief my briefing tool writes is also run through claim-seal. It reuses the production judge's answers instead of asking a model again, and compares its results with the checker it was extracted from. That checker still decides what the reader sees. On the first 5 briefs the two agreed on 30 of 30 claim verdicts, 35 of 35 sentence relations and 56 of 56 evidence windows, and made the same seals. Because the answers are replayed, this compares two code paths on the same model answers, not two independent judgements. From 2026-10-26 a second daily brief runs it the same way; this section will report what it finds. Both run commit e0b352c, the version before the security fixes. The fixes in this repository change the judge prompts and when a verdict counts as supported, so the production copies move to the current version only after agreement is measured again.
@@ -262,7 +262,7 @@ for `norm/v1`, although the transformation is the same.
 
 Off by default. When you turn it on, each checkable claim is also put to Jev, a small classifier
 served on OpenRouter's decisions endpoint, once per cited source: does this source support the
-claim, contradict it, or say nothing about it? Jev answers with one of the three and a confidence.
+claim, contradict it, or say nothing about it? Jev answers with one of the three and a probability.
 
 **Use it in shadow mode.** Turned on with no other setting, Jev decides nothing: the judge
 decides every claim exactly as before, and Jev's answers are recorded beside the judge's, with a
@@ -288,11 +288,19 @@ or `none` for a claim no model could check), why (`shadow`, `below-threshold`,
 `citations-disagree`, `class-not-deciding`, `no-window`, or `fallback:` plus the failure), Jev's
 claim-level answer when every cited source got a confident, consistent answer (`jev_choice`),
 claim-seal's own reading of the claim (`claim_seal_reading`), and per cited source Jev's choice,
-confidence, the model id that answered, cost and latency. Each sealed row holds a `decider` block
+probability (P of the choice it gave, from the reply's own `probabilities`; the reply's `confidence`
+field is kept beside it, see below), the model id that answered, cost and latency. Each sealed row holds a `decider` block
 with the path, mode, Jev's answers and the model ids, so a later edit to who decided breaks the
 seal. The run record gains `first_pass`: the mode, the settings (the key's variable name, never
 the key), counts, reasons, total returned cost, latency, and `compared_with_judge` (each pair of
 Jev's answer and claim-seal's verdict, counted). A claim-seal `partial` never counts as agreement.
+
+**Which number is the probability.** The endpoint's `confidence` is not P(choice): it is the
+probability rescaled so that an even split is 0 and a certain answer is 1, `(3P - 1) / 2` for these
+three answers. So the default threshold 0.80 now means P(choice) 0.80, where an earlier build that
+read `confidence` needed P 0.867. When a reply has no usable `probabilities` block, P is taken back
+from `confidence` the same way and the answer is marked `probability_basis: "confidence-margin"`
+(counted in `first_pass.probability_from_margin`).
 
 **What Jev reads.** The claim and the same window of the captured source that the judge must quote
 from. A cited source with no captured body has no window, and its claim is not put to Jev. A source
@@ -328,6 +336,8 @@ and zero retention. The same settings come from `CLAIM_SEAL_JEV` (on/off),
 redirects refused, and the key is read when a check starts and never stored or written.
 
 **What was measured.** Two tests, both with `typesafe/jev-1.14-20261014`, each claim asked once.
+
+Both tests applied the 0.80 threshold to the reply's `confidence` field, which is the same as P(choice) 0.867 (see "Which number is the probability" above); the current build applies 0.80 to P(choice), so a rerun would count a few more answers as confident.
 
 *First, 200 human-labelled claim/evidence pairs* (each a short claim and one evidence sentence,
 from a public fact-checking dataset). claim-seal's judge had answered the same pairs earlier; its

@@ -28,16 +28,33 @@ AUDIT = "The audit trail records the audit trail twice when the audit trail rota
 TRADE = "Both the queue rewrite and the compaction pass trade peak speed for steadier tails."
 
 
-def reply(choice, confidence, model="typesafe/jev-test", cost=0.00002):
-    return json.dumps({"answers": {"relation": {"choice": choice, "confidence": confidence,
-                                                "type": "choice"}},
+def probs_for(choice, p):
+    """A probabilities block in which `choice` has probability p and the rest is split evenly, rounded to two
+    decimals as the endpoint does. p must be at least 1/3 so that `choice` is a largest entry."""
+    rest = round((1.0 - p) / 2, 2)
+    return {c: (round(p, 2) if c == choice else rest) for c in CHOICES}
+
+
+def margin_of(p, k=3):
+    """The endpoint's `confidence`: P rescaled so an even split is 0 and a certain answer is 1."""
+    return round((k * p - 1.0) / (k - 1), 2)
+
+
+def reply(choice, p, model="typesafe/jev-test", cost=0.00002, probabilities=True, confidence=None):
+    """A decisions reply whose answer has probability p. By default it carries the probabilities block and the
+    confidence field the endpoint would compute from it; probabilities=False omits the block."""
+    answer = {"choice": choice, "confidence": margin_of(p) if confidence is None else confidence,
+              "type": "choice"}
+    if probabilities:
+        answer["probabilities"] = probs_for(choice, p)
+    return json.dumps({"answers": {"relation": answer},
                        "id": "gen-dec-test", "model": model, "provider": "Fake",
                        "usage": {"cost": cost, "input_tokens": 500, "output_tokens": 44}}).encode()
 
 
 class FakeJev:
     """transport(endpoint, body, headers, timeout): answers from rule(claim, section) which returns
-    (choice, confidence), raw bytes, or an exception to raise. Records every call."""
+    (choice, P(choice)), raw bytes, or an exception to raise. Records every call."""
 
     def __init__(self, rule):
         self.rule = rule
@@ -150,7 +167,7 @@ class Threshold(unittest.TestCase):
         self.assertEqual(v["decided_by"]["by"], "judge")
         self.assertEqual(v["decided_by"]["reason"], "below-threshold")
         self.assertEqual(v["decided_by"]["answers"][0]["choice"], "supports")
-        self.assertEqual(v["decided_by"]["answers"][0]["confidence"], 0.79)
+        self.assertEqual(v["decided_by"]["answers"][0]["probability"], 0.79)
         self.assertEqual(calls.get(RELAY), 1)
         b, s = corpus()
         off = claims_of(judge(b, s, per_claim_model()[0]))[RELAY]
@@ -166,6 +183,83 @@ class Threshold(unittest.TestCase):
     def test_the_default_threshold_is_0_80(self):
         self.assertEqual(DEFAULT_THRESHOLD, 0.80)
         self.assertEqual(JevFirstPass(api_key_env=KEY_ENV).threshold, 0.80)
+
+
+@patch.dict(os.environ, {KEY_ENV: KEY})
+class ProbabilityReading(unittest.TestCase):
+    """The threshold reads P(choice) from `probabilities`, never the `confidence` margin."""
+
+    def ask(self, raw):
+        first = JevFirstPass(transport=lambda *a: raw, api_key_env=KEY_ENV)
+        return first.ask(KEY, "a claim", "a section")
+
+    def test_confidence_is_the_margin_not_the_probability(self):
+        # P 0.85 for three answers is confidence 0.77 (0.775): read as a probability it would be below 0.80
+        got = self.ask(reply("supports", 0.85))
+        self.assertEqual((got["probability"], got["confidence"], got["probability_basis"]),
+                         (0.85, margin_of(0.85), "probabilities"))
+        self.assertLess(got["confidence"], 0.80)
+
+    def test_a_probability_of_0_85_decides_at_the_default_threshold_though_its_confidence_is_below_it(self):
+        first, fake = fp(table({RELAY: ("supports", 0.85)}))
+        model, calls = per_claim_model()
+        b, s = corpus()
+        result = judge(b, s, model, first_pass=first)
+        v = claims_of(result)[RELAY]
+        self.assertEqual(v["decided_by"]["by"], "jev")
+        self.assertLess(v["decided_by"]["answers"][0]["confidence"], 0.80)
+        self.assertGreaterEqual(v["decided_by"]["answers"][0]["probability"], 0.80)
+
+    def test_the_old_confidence_rule_would_have_decided_where_the_probability_does_not(self):
+        # confidence 0.80 is P 0.867; a reply that says P 0.78 but (wrongly) confidence 0.95 must go by P
+        got = self.ask(reply("supports", 0.78, confidence=0.95))
+        self.assertEqual(got["probability"], 0.78)
+        first, _ = fp(lambda c, s: reply("supports", 0.78, confidence=0.95))
+        model, calls = per_claim_model()
+        b, s = corpus()
+        v = claims_of(judge(b, s, model, first_pass=first))[RELAY]
+        self.assertEqual((v["decided_by"]["by"], v["decided_by"]["reason"]), ("judge", "below-threshold"))
+
+    def test_the_probability_of_the_answer_given_is_the_one_read(self):
+        raw = json.dumps({"answers": {"relation": {"choice": "contradicts", "confidence": 0.5, "type": "choice",
+                                                   "probabilities": {"supports": 0.1, "contradicts": 0.7,
+                                                                     "says_nothing": 0.2}}}}).encode()
+        self.assertEqual(self.ask(raw)["probability"], 0.7)
+
+    def test_a_missing_block_falls_back_to_the_inverted_margin_and_says_so(self):
+        got = self.ask(reply("supports", 0.85, probabilities=False))
+        self.assertEqual(got["probability_basis"], "confidence-margin")
+        self.assertAlmostEqual(got["probability"], (margin_of(0.85) * 2 + 1) / 3, places=5)
+        first, _ = fp(lambda c, s: reply("supports", 0.9, probabilities=False))
+        model, _ = per_claim_model()
+        b, s = corpus()
+        result = judge(b, s, model, first_pass=first)
+        self.assertGreater(result["verification"]["first_pass"]["probability_from_margin"], 0)
+
+    def test_an_unusable_block_is_not_trusted(self):
+        for block in ({"supports": 0.9, "contradicts": 0.1},                                   # a choice missing
+                      {"supports": 0.2, "contradicts": 0.7, "says_nothing": 0.1},              # answer not the largest
+                      {"supports": 0.9, "contradicts": 0.9, "says_nothing": 0.9},              # does not sum to one
+                      {"supports": 1.4, "contradicts": -0.2, "says_nothing": -0.2},            # out of range
+                      {"supports": "high", "contradicts": 0.0, "says_nothing": 0.0}):          # not numbers
+            raw = json.dumps({"answers": {"relation": {"choice": "supports", "confidence": 0.9, "type": "choice",
+                                                       "probabilities": block}}}).encode()
+            self.assertEqual(self.ask(raw)["probability_basis"], "confidence-margin", block)
+
+    def test_the_recorded_probability_is_inside_the_seal(self):
+        first, _ = fp(table({RELAY: ("supports", 0.95)}))
+        b, s = corpus()
+        result = judge(b, s, per_claim_model()[0], first_pass=first)
+        rows = [r for r in result["claim_evidence"]["outcomes"]
+                if any(a.get("probability") == 0.95 for a in r["decider"]["answers"])]
+        self.assertTrue(rows)
+        self.assertTrue(verify_seal(result["claim_evidence"]))
+        tampered = json.loads(json.dumps(result["claim_evidence"]))
+        for r in tampered["outcomes"]:
+            for a in r["decider"]["answers"]:
+                if a.get("probability") == 0.95:
+                    a["probability"] = 0.99
+        self.assertFalse(verify_seal(tampered))
 
 
 @patch.dict(os.environ, {KEY_ENV: KEY})
@@ -188,7 +282,9 @@ class Mapping(unittest.TestCase):
                          ("supported", "present", "undetermined", "jev-first-pass"))
         self.assertEqual(row["decider"]["section"], "evidence-window")
         self.assertEqual(row["decider"]["answers"], [{"citation_index": 0, "choice": "supports",
-                                                      "confidence": 0.97, "model": "typesafe/jev-test"}])
+                                                      "confidence": margin_of(0.97), "probability": 0.97,
+                                                      "probability_basis": "probabilities",
+                                                      "model": "typesafe/jev-test"}])
         span = row["evidence_spans"][0]
         self.assertTrue(span["start"] >= 0 and span["end"] > span["start"])
         self.assertNotIn(AUDIT, calls)
@@ -376,8 +472,9 @@ class TheRecord(unittest.TestCase):
     def test_the_claim_records_choice_confidence_model_cost_and_latency(self):
         result, _ = self.result()
         answer = claims_of(result)[RELAY]["decided_by"]["answers"][0]
-        self.assertEqual((answer["choice"], answer["confidence"], answer["model"], answer["cost_usd"]),
-                         ("supports", 0.93, "typesafe/jev-test", 0.00002))
+        self.assertEqual((answer["choice"], answer["probability"], answer["confidence"], answer["model"],
+                          answer["cost_usd"]),
+                         ("supports", 0.93, margin_of(0.93), "typesafe/jev-test", 0.00002))
         self.assertIsInstance(answer["latency_s"], float)
 
     def test_the_run_record_counts_and_costs(self):
@@ -514,7 +611,7 @@ class Shadow(unittest.TestCase):
 
     def test_agreement_is_counted(self):
         def rule(claim, section):
-            return ("supports", 0.99) if claim == LABS else ("says_nothing", 0.2)
+            return ("supports", 0.99) if claim == LABS else ("says_nothing", 0.4)
         model = helpers.Scripted(lambda prompt: json.dumps({"verdicts": [{
             "claim": 1, "verdict": "supported", "why": "w", "relation": "says",
             "evidence_spans": [{"citation_index": 0, "support_span": "A compaction pass cut resident memory"}]}]}))

@@ -93,8 +93,8 @@ def _print_report(result: dict, out, labels: dict | None = None) -> None:
         w(f"    why: {v.get('why', '')}\n")
         decided = v.get("decided_by")
         if decided:
-            answers = ", ".join(f"{a.get('choice') or a.get('error')} {a['confidence']:.2f}"
-                                if "confidence" in a else str(a.get("error"))
+            answers = ", ".join(f"{a.get('choice') or a.get('error')} {a['probability']:.2f}"
+                                if "probability" in a else str(a.get("error"))
                                 for a in decided.get("answers") or [])
             w(f"    decided by: {decided['by']}"
               + (f" ({decided['reason']})" if decided.get("reason") else "")
@@ -300,8 +300,9 @@ def main(argv: list[str] | None = None) -> int:
                             "beside the judge, decides nothing; key from $OPENROUTER_API_KEY or "
                             "$CLAIM_SEAL_JEV_KEY_ENV; other settings from CLAIM_SEAL_JEV_*)")
     check.add_argument("--jev-threshold", type=float, default=None,
-                       help="confidence at or above which Jev's answer counts (default 0.80; "
-                            "implies --jev)")
+                       help="probability P(choice) at or above which Jev's answer counts (default "
+                            "0.80; read from the reply's probabilities, not its confidence "
+                            "field; implies --jev)")
     check.add_argument("--jev-decide", default=None, metavar="ANSWERS",
                        help="comma list of Jev answers allowed to decide a claim instead of the "
                             "judge (supports,contradicts,says_nothing); default none = shadow; "
