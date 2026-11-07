@@ -1,0 +1,145 @@
+name: release
+# Builds the release files from an owner-signed tag, attests each file, and publishes the GitHub
+# release. Runs when a v* tag is pushed, or by hand ("Run workflow", branch main, tag = an existing
+# tag such as v0.2.0) so a tag that is already pushed can be released without moving it.
+on:
+  push:
+    tags: ["v[0-9]*.[0-9]*.[0-9]*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to build and publish (for example v0.2.0)"
+        required: true
+        type: string
+permissions: {}
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  release:
+    # A manual run must start from main, so the workflow that holds write access is the reviewed one.
+    if: github.event_name == 'push' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write       # create the release and upload its files
+      id-token: write       # sign the attestations (sigstore, short-lived OIDC identity)
+      attestations: write   # store the attestations
+    env:
+      # The tag arrives through the environment, never pasted into a script.
+      REQUESTED_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+    steps:
+      - name: Check the tag name
+        id: tag
+        run: |
+          # bash matches the whole value, so a value with a newline in it cannot slip through.
+          if ! [[ "$REQUESTED_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag must be exactly vMAJOR.MINOR.PATCH"; exit 1
+          fi
+          echo "name=$REQUESTED_TAG" >> "$GITHUB_OUTPUT"
+      # Actions are pinned to commit SHAs (tag in the comment), like ci.yml.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          ref: refs/tags/${{ steps.tag.outputs.name }}
+          fetch-depth: 0        # full history and the tag object, to check the tag against main
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Check the tag is a signed, annotated tag on a commit on main
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
+          EVENT_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -eu
+          [ "$(git cat-file -t "refs/tags/$TAG")" = "tag" ] \
+            || { echo "::error::$TAG is a lightweight tag; releases need an annotated, signed tag"; exit 1; }
+          [ "$(git cat-file tag "refs/tags/$TAG" | sed -n 's/^tag //p')" = "$TAG" ] \
+            || { echo "::error::the tag object inside $TAG names a different tag"; exit 1; }
+          COMMIT=$(git rev-parse "refs/tags/$TAG^{commit}")
+          [ "$(git rev-parse HEAD)" = "$COMMIT" ] \
+            || { echo "::error::checked-out commit is not the tag's commit"; exit 1; }
+          if [ "$EVENT_NAME" = "push" ] && [ "$EVENT_SHA" != "$COMMIT" ]; then
+            echo "::error::the tag moved between the push and this run"; exit 1
+          fi
+          git rev-parse --verify --quiet refs/remotes/origin/main > /dev/null \
+            || { echo "::error::origin/main is missing from the checkout"; exit 1; }
+          git merge-base --is-ancestor "$COMMIT" refs/remotes/origin/main \
+            || { echo "::error::$TAG ($COMMIT) is not on main"; exit 1; }
+          # The signature is checked against the owner's key as it stands on main, not against a
+          # key file carried by the tag's own tree.
+          git show refs/remotes/origin/main:.github/allowed_signers > "$RUNNER_TEMP/allowed_signers"
+          git -c gpg.ssh.allowedSignersFile="$RUNNER_TEMP/allowed_signers" tag -v "$TAG"
+          VERSION=${TAG#v}
+          python3 - "$VERSION" "$TAG" <<'PY'
+          import sys, tomllib
+          version = tomllib.load(open("pyproject.toml", "rb"))["project"]["version"]
+          sys.exit(0 if version == sys.argv[1] else "pyproject version %s does not match tag %s" % (version, sys.argv[2]))
+          PY
+          {
+            echo "COMMIT=$COMMIT"
+            echo "VERSION=$VERSION"
+            # The wheel gets the same bytes on every rebuild of this commit (the sdist still carries
+            # build-time stamps, so its checksum is recorded, not predicted).
+            echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct "$COMMIT")"
+          } >> "$GITHUB_ENV"
+      - name: Stop if this tag already has a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "::error::$TAG already has a release; delete it first if it must be rebuilt"; exit 1
+          fi
+      - name: Build, install clean, run the demo, write SHA256SUMS
+        run: sh tools/build_check.sh dist
+      - name: Check the files
+        run: |
+          set -eu
+          cd dist
+          ls
+          [ "$(ls | wc -l)" -eq 3 ]
+          test -f "claim_seal-$VERSION-py3-none-any.whl"
+          test -f "claim_seal-$VERSION.tar.gz"
+          sha256sum -c SHA256SUMS
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-path: |
+            dist/claim_seal-${{ env.VERSION }}-py3-none-any.whl
+            dist/claim_seal-${{ env.VERSION }}.tar.gz
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          set -eu
+          {
+            if [ -f CHANGELOG.md ]; then
+              # The CHANGELOG section whose heading names this version, if there is one.
+              awk -v v="$VERSION" 'BEGIN{gsub(/[.]/, "[.]", v)} /^## /{p = ($0 ~ ("^## v?[[]?" v "([] ]|$)")); next} p' CHANGELOG.md
+            fi
+          } > section.md
+          if [ -s section.md ]; then
+            cp section.md notes.md
+          else
+            printf 'claim-seal %s, built by GitHub Actions from the signed tag %s (commit %s).\n' \
+              "$VERSION" "$TAG" "$COMMIT" > notes.md
+          fi
+          printf '\nFiles: the wheel, the sdist and SHA256SUMS. The wheel and the sdist each have a build-provenance attestation.\n' >> notes.md
+          printf 'The attestation names the release workflow as it stood on main when it ran; the tag commit it built is %s.\n\n' "$COMMIT" >> notes.md
+          printf 'Verify a download:\n\n    gh attestation verify claim_seal-%s-py3-none-any.whl --repo %s\n    sha256sum -c SHA256SUMS\n' \
+            "$VERSION" "$GITHUB_REPOSITORY" >> notes.md
+          # The tag must still point at the commit that was checked and built.
+          [ "$(git ls-remote origin "refs/tags/$TAG^{}" | cut -f1)" = "$COMMIT" ] \
+            || { echo "::error::$TAG no longer points at $COMMIT"; exit 1; }
+          # Draft first, publish once all three files are attached, so a failed upload never leaves a
+          # public release with files missing.
+          gh release create "$TAG" \
+            "dist/claim_seal-$VERSION-py3-none-any.whl" \
+            "dist/claim_seal-$VERSION.tar.gz" \
+            dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "claim-seal $VERSION" --notes-file notes.md
+          [ "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')" -eq 3 ] \
+            || { echo "::error::the draft release does not hold all three files"; exit 1; }
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false

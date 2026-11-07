@@ -1,0 +1,5 @@
+# The owner's SSH signing key (GitHub user aryamurthi; the same key GitHub lists at
+# https://api.github.com/users/aryamurthi/ssh_signing_keys and that signed tag v0.2.0).
+# release.yml checks release tags against this file as it stands on main. The principal is a wildcard
+# because the key, not the tagger e-mail, is what is trusted.
+* namespaces="git" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPhCsorVXAzcf+2ROyGW8tCPpslnINQUamPSGGkMVnBO

@@ -32,8 +32,14 @@ publish a release, while a receipt is missing.
    `git tag -s v0.2.0 -m "claim-seal 0.2.0"` and push the tag.
    Receipt: `git tag -v v0.2.0` reports a good signature from the owner's key.
 7. **Publish the artifacts with their checksums and a provenance attestation.**
-   Attach both files and `SHA256SUMS` to the GitHub release; create an attestation for each file
-   (GitHub artifact attestations, `actions/attest-build-provenance` in a release workflow, or
-   `gh attestation` tooling).
+   `.github/workflows/release.yml` does this: it checks out the tag, checks that it is an annotated
+   tag on a commit on main and that its signature is good against `.github/allowed_signers` (the
+   owner's public signing key, as it stands on main), runs `sh tools/build_check.sh dist`, attests the
+   wheel and the sdist (`actions/attest-build-provenance`), and creates the GitHub release with both
+   files and `SHA256SUMS`. It runs when a `v*` tag is pushed. For a tag that is already pushed, run it
+   by hand: Actions, release, Run workflow, branch `main`, tag `v0.2.0`. Never move or re-create a
+   signed tag to trigger it.
+   The attestation names the workflow as it stood on main when it ran (the tag's own tree may predate
+   the workflow); the job log shows the tag and commit it built.
    Receipt: `gh attestation verify dist/claim_seal-0.2.0-py3-none-any.whl --repo lensmith-ai/claim-seal`
    succeeds, and `sha256sum -c SHA256SUMS` passes on the downloaded files.
