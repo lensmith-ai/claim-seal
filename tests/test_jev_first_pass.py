@@ -362,6 +362,165 @@ class SeveralCitations(unittest.TestCase):
         self.assertEqual(calls.get(LABS), 1)
 
 
+def csj_question_criteria():
+    from claim_seal.jev import QUESTION
+    return QUESTION["criteria"]
+
+
+class FakeBatchJev:
+    """Transport for batch=True: one request per claim; answers each `relation_i` from rule(claim, section of sections[i])."""
+
+    def __init__(self, rule, fail=None):
+        self.rule, self.fail, self.calls, self._lock = rule, fail, [], threading.Lock()
+
+    def __call__(self, endpoint, body, headers, timeout):
+        req = json.loads(body)
+        with self._lock:
+            self.calls.append(req)
+        if self.fail is not None:
+            raise self.fail
+        answers = {}
+        for qid in req["questions"]:
+            i = int(qid.rsplit("_", 1)[1])
+            out = self.rule(req["state"]["claim"], req["state"]["sections"][i])
+            decoded = json.loads(reply(*out))
+            answers[qid] = decoded["answers"]["relation"]
+        return json.dumps({"answers": answers, "id": "gen-dec-batch", "model": "typesafe/jev-test", "provider": "Fake",
+                           "usage": {"cost": 0.00004, "input_tokens": 900, "output_tokens": 88}}).encode()
+
+
+class FakeClient:
+    """What a shared client looks like to claim-seal: ask(state, questions) -> {id: answer with .ok .raw ...}."""
+
+    class A:
+        def __init__(self, raw=None, error=None):
+            self.ok, self.raw, self.error = error is None, raw, error
+            self.cost_usd, self.latency_s, self.request_id, self.model_returned = 0.00001, 0.1, "gen-1", "typesafe/jev-test"
+
+    def __init__(self, rule, error=None):
+        self.rule, self.error, self.calls = rule, error, []
+
+    def ask(self, state, questions):
+        self.calls.append((state, questions))
+        if self.error:
+            return {q: self.A(error=self.error) for q in questions}
+        out = {}
+        for qid in questions:
+            if "section" in state:                      # the default request: one question, one section
+                section = state["section"]
+            else:
+                section = state["sections"][int(qid.rsplit("_", 1)[1])]
+            out[qid] = self.A(raw=json.loads(reply(*self.rule(state["claim"], section)))["answers"]["relation"])
+        return out
+
+
+@patch.dict(os.environ, {KEY_ENV: KEY})
+class BatchPerClaim(unittest.TestCase):
+    """batch=True: ONE request per claim, the state is {claim, sections}, the question for source i points at `sections[i]`."""
+
+    def run_labs(self, alpha, beta, **kw):
+        rule = table({LABS: {"resident memory": alpha, "second lab": beta}})
+        fake = FakeBatchJev(rule)
+        first = JevFirstPass(transport=fake, api_key_env=KEY_ENV, decide=CHOICES, batch=True, **kw)
+        model, calls = per_claim_model()
+        b, s = corpus()
+        return judge(b, s, model, first_pass=first), calls, fake
+
+    def test_one_request_for_a_claim_with_two_cited_sources(self):
+        _, _, fake = self.run_labs(("supports", 0.9), ("supports", 0.9))
+        labs = [c for c in fake.calls if c["state"]["claim"] == LABS]
+        self.assertEqual(len(labs), 1)
+        self.assertEqual(len(labs[0]["state"]["sections"]), 2)
+        self.assertEqual(sorted(labs[0]["questions"]), ["relation_0", "relation_1"])
+
+    def test_questions_point_at_the_section_by_path_and_hold_no_text_of_it(self):
+        _, _, fake = self.run_labs(("supports", 0.9), ("supports", 0.9))
+        labs = [c for c in fake.calls if c["state"]["claim"] == LABS][0]
+        q1 = labs["questions"]["relation_1"]
+        self.assertEqual(q1["instructions"], {"question": "How does the evidence section relate to the claim?",
+                                              "claim": "`claim`", "section": "`sections[1]`"})
+        self.assertEqual(q1["criteria"], {"supports": "The evidence section states the claim or directly implies that it is true.",
+                                          "contradicts": "The evidence section states the opposite of the claim or implies it is false.",
+                                          "says_nothing": "The evidence section does not address what the claim asserts, either way."})
+        text = json.dumps(labs["questions"])
+        for section in labs["state"]["sections"]:
+            self.assertNotIn(section[:40], text)
+
+    def test_the_decisions_are_the_ones_the_per_source_pass_makes(self):
+        for alpha, beta in ((("supports", 0.9), ("says_nothing", 0.95)), (("supports", 0.99), ("contradicts", 0.99)),
+                            (("supports", 0.99), ("supports", 0.5))):
+            batched, _, _ = self.run_labs(alpha, beta)
+            first, _ = fp(table({LABS: {"resident memory": alpha, "second lab": beta}}))
+            model, _ = per_claim_model()
+            b, s = corpus()
+            single = judge(b, s, model, first_pass=first)
+            for one, other in zip(claims_of(batched).values(), claims_of(single).values()):
+                self.assertEqual((one["verdict"], one["decided_by"]["by"], one["decided_by"].get("reason")),
+                                 (other["verdict"], other["decided_by"]["by"], other["decided_by"].get("reason")))
+
+    def test_the_cost_of_one_request_is_shared_across_its_answers(self):
+        result, _, _ = self.run_labs(("supports", 0.9), ("supports", 0.9))
+        answers = claims_of(result)[LABS]["decided_by"]["answers"]
+        self.assertAlmostEqual(sum(a["cost_usd"] for a in answers), 0.00004, places=9)
+
+    def test_a_failed_request_sends_the_claim_to_the_judge(self):
+        fake = FakeBatchJev(table({}), fail=JevError("timeout", "t"))
+        first = JevFirstPass(transport=fake, api_key_env=KEY_ENV, decide=CHOICES, batch=True)
+        model, _ = per_claim_model()
+        b, s = corpus()
+        result = judge(b, s, model, first_pass=first)
+        self.assertEqual(claims_of(result)[RELAY]["decided_by"]["reason"], "fallback:timeout")
+
+    def test_batch_is_off_by_default_and_the_settings_say_which(self):
+        self.assertFalse(JevFirstPass().batch)
+        self.assertTrue(JevFirstPass(batch=True).settings()["batch"])
+
+
+@patch.dict(os.environ, {KEY_ENV: KEY})
+class InjectedClient(unittest.TestCase):
+    """client= hands the calling to an object with ask(state, questions); claim-seal imports nothing of it."""
+
+    def run_with(self, client, **kw):
+        first = JevFirstPass(client=client, decide=CHOICES, **kw)
+        model, calls = per_claim_model()
+        b, s = corpus()
+        return judge(b, s, model, first_pass=first), calls
+
+    def test_a_client_decides_like_the_transport_and_gets_the_same_request_per_cited_source(self):
+        rule = table({RELAY: ("supports", 0.9)})
+        client = FakeClient(rule)
+        result, calls = self.run_with(client)
+        self.assertEqual(claims_of(result)[RELAY]["decided_by"]["by"], "jev")
+        self.assertNotIn(RELAY, calls)
+        self.assertFalse(JevFirstPass(client=client).batch)
+        state, questions = client.calls[0]
+        self.assertEqual(set(state), {"claim", "section"})
+        self.assertEqual(questions, {"relation": {"type": "choice", "instructions": "How does the evidence section relate to the claim?",
+                                                  "criteria": csj_question_criteria()}})
+
+    def test_a_client_with_batch_on_is_asked_once_per_claim(self):
+        client = FakeClient(table({RELAY: ("supports", 0.9)}))
+        result, _ = self.run_with(client, batch=True)
+        self.assertEqual(claims_of(result)[RELAY]["decided_by"]["by"], "jev")
+        self.assertEqual(len({c[0]["claim"] for c in client.calls}), len(client.calls))
+        self.assertTrue(all("sections" in c[0] for c in client.calls))
+
+    def test_a_client_needs_no_key_in_the_environment(self):
+        with patch.dict(os.environ, {}, clear=True):
+            result, _ = self.run_with(FakeClient(table({RELAY: ("supports", 0.9)})))
+        self.assertEqual(claims_of(result)[RELAY]["decided_by"]["by"], "jev")
+
+    def test_a_client_error_falls_back_to_the_judge_with_the_reason_counted(self):
+        result, _ = self.run_with(FakeClient(table({}), error="refused_cap-month"))
+        self.assertEqual(claims_of(result)[RELAY]["decided_by"]["reason"], "fallback:cap-month")
+        result, _ = self.run_with(FakeClient(table({}), error="timeout"))
+        self.assertEqual(claims_of(result)[RELAY]["decided_by"]["reason"], "fallback:timeout")
+
+    def test_a_client_without_ask_is_refused(self):
+        with self.assertRaises(ValueError):
+            JevFirstPass(client=object())
+
+
 @patch.dict(os.environ, {KEY_ENV: KEY})
 class Fallback(unittest.TestCase):
     def assert_same_as_off(self, result, base):

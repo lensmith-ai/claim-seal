@@ -198,13 +198,24 @@ class JevFirstPass:
     provider       the provider routing block sent with each request (default DEFAULT_PROVIDER)
     transport      transport(endpoint, body_bytes, headers, timeout) -> reply bytes; for tests.
                    Default: one https POST, redirects refused.
+    batch          ask ONE request per claim instead of one per cited source: the state is
+                   {"claim": ..., "sections": [...]} and the question for source i points at
+                   `sections[i]` by path (the way typesafe's guide structures a request). Default
+                   False, which keeps the question exactly as the published numbers were measured.
+    client         an object with ask(state, questions) -> {question id: answer} that does the
+                   calling for you (caps, a shared spend ledger, traces, retries, a cache). Each
+                   answer has .ok, .error and .raw (the endpoint's answer object) and may carry
+                   .cost_usd, .latency_s, .request_id, .model_returned. claim-seal imports nothing
+                   of the client: it only calls ask(). The request is the same as the transport's
+                   unless batch is also on. Without a client, transport and the key from
+                   api_key_env are used as before.
     """
 
     def __init__(self, *, threshold: float = DEFAULT_THRESHOLD, model: str = DEFAULT_MODEL,
                  endpoint: str = DEFAULT_ENDPOINT, api_key_env: str = DEFAULT_KEY_ENV,
                  timeout_s: float = DEFAULT_TIMEOUT_S, pool_size: int = DEFAULT_POOL,
                  decide=DEFAULT_DECIDE, provider: dict | None = None, transport=None,
-                 allow_insecure_loopback: bool = False):
+                 allow_insecure_loopback: bool = False, client=None, batch: bool | None = None):
         from .adapters import AdapterError, _checked_base_url  # local: adapters imports support
 
         self.threshold = _check_threshold(threshold)
@@ -232,6 +243,10 @@ class JevFirstPass:
         self.decide = tuple(c for c in CHOICES if c in decide)
         self.provider = dict(DEFAULT_PROVIDER if provider is None else provider)
         self.transport = transport or _https_transport
+        if client is not None and not callable(getattr(client, "ask", None)):
+            raise ValueError("client must have an ask(state, questions) method")
+        self.client = client
+        self.batch = False if batch is None else bool(batch)
 
     # ---- configuration from the environment ------------------------------------------------
     @classmethod
@@ -286,7 +301,8 @@ class JevFirstPass:
         """What the run record keeps: never the key, only the name of its variable."""
         return {"mode": self.mode, "endpoint": self.endpoint, "model_requested": self.model,
                 "threshold": self.threshold, "decide": list(self.decide),
-                "timeout_s": self.timeout_s, "api_key_env": self.api_key_env}
+                "timeout_s": self.timeout_s, "api_key_env": self.api_key_env,
+                "batch": self.batch, "client": self.client is not None}
 
     # ---- one call ---------------------------------------------------------------------------
     def request_body(self, claim: str, section: str) -> bytes:
@@ -300,32 +316,123 @@ class JevFirstPass:
         latency_s, request_id}, or a JevError. `confidence` is the endpoint's rescaled margin and is
         only recorded; `probability` is P(choice) (see read_probability) and is what the threshold
         reads. The key goes into one header and nowhere else."""
+        if self.client is not None:
+            # one question per request through the injected client, the request exactly the one a transport would send
+            got = self._ask_via_client({"claim": claim, "section": section}, {QUESTION_ID: QUESTION})
+            if "error" in got[0]:
+                raise JevError(got[0]["error"], got[0]["error"])
+            return got[0]
         started = time.monotonic()
         raw = self.transport(self.endpoint, self.request_body(claim, section),
                              {"Authorization": "Bearer " + key}, self.timeout_s)
         latency = round(time.monotonic() - started, 3)
+        doc = self._doc(raw)
+        answers = doc.get("answers") if isinstance(doc, dict) else None
+        return self._answer(answers.get(QUESTION_ID) if isinstance(answers, dict) else None, doc, latency)
+
+    @staticmethod
+    def _doc(raw) -> dict:
         try:
-            doc = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw)
+            return json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw)
         except (UnicodeDecodeError, ValueError, RecursionError, TypeError):
             raise JevError("invalid-response", "reply is not JSON") from None
-        answers = doc.get("answers") if isinstance(doc, dict) else None
-        answer = answers.get(QUESTION_ID) if isinstance(answers, dict) else None
+
+    def _answer(self, answer, doc, latency: float, *, cost_share: float | None = None,
+                request_id=None, model=None) -> dict:
         choice = answer.get("choice") if isinstance(answer, dict) else None
         confidence = answer.get("confidence") if isinstance(answer, dict) else None
         if (choice not in CHOICES or isinstance(confidence, bool)
                 or not isinstance(confidence, (int, float)) or not 0.0 <= float(confidence) <= 1.0):
             raise JevError("invalid-response", "choice or confidence missing or out of range")
-        usage = doc.get("usage") if isinstance(doc.get("usage"), dict) else {}
-        cost = usage.get("cost")
-        cost = float(cost) if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None
-        model = doc.get("model")
-        request_id = doc.get("id")
+        if cost_share is None and isinstance(doc, dict):
+            usage = doc.get("usage") if isinstance(doc.get("usage"), dict) else {}
+            cost = usage.get("cost")
+            cost_share = float(cost) if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None
+            model = doc.get("model")
+            request_id = doc.get("id")
         probability, basis = read_probability(answer, choice, float(confidence))
         return {"choice": choice, "confidence": float(confidence),
                 "probability": round(probability, 6), "probability_basis": basis,
                 "model": model if isinstance(model, str) else None,
-                "cost_usd": cost, "latency_s": latency,
+                "cost_usd": cost_share, "latency_s": latency,
                 "request_id": request_id if isinstance(request_id, str) else None}
+
+    # ---- one request per claim (batch) ------------------------------------------------------
+    @staticmethod
+    def batch_state(claim: str, sections: list) -> dict:
+        return {"claim": claim, "sections": list(sections)}
+
+    @staticmethod
+    def batch_questions(n: int) -> dict:
+        """One question per cited section, all about the same state. The wording is QUESTION's; the section
+        it is about is named by a backticked path, so no text is spliced into a question."""
+        return {f"{QUESTION_ID}_{i}": {"type": "choice",
+                                      "instructions": {"question": QUESTION["instructions"], "claim": "`claim`",
+                                                       "section": f"`sections[{i}]`"},
+                                      "criteria": QUESTION["criteria"]} for i in range(n)}
+
+    def ask_claim(self, key: str, claim: str, sections: list) -> list:
+        """Answers for every section of one claim from ONE request: a list, in section order, of the same dicts
+        ask() returns or {"error": kind}. Never raises for a Jev failure."""
+        state, questions = self.batch_state(claim, sections), self.batch_questions(len(sections))
+        if self.client is not None:
+            return self._ask_claim_client(state, questions)
+        body = json.dumps({"model": self.model, "provider": self.provider, "questions": questions, "state": state},
+                          ensure_ascii=False, sort_keys=True).encode("utf-8")
+        try:
+            started = time.monotonic()
+            raw = self.transport(self.endpoint, body, {"Authorization": "Bearer " + key}, self.timeout_s)
+            latency = round(time.monotonic() - started, 3)
+            doc = self._doc(raw)
+        except JevError as exc:
+            return [{"error": exc.kind}] * len(sections)
+        except Exception as exc:  # noqa: BLE001 - a broken transport is a fallback, never a crash
+            return [{"error": "transport", "detail": type(exc).__name__}] * len(sections)
+        answers = doc.get("answers") if isinstance(doc, dict) else None
+        usage = doc.get("usage") if isinstance(doc, dict) and isinstance(doc.get("usage"), dict) else {}
+        cost = usage.get("cost")
+        share = float(cost) / len(sections) if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None
+        out = []
+        for i in range(len(sections)):
+            try:
+                out.append(self._answer(answers.get(f"{QUESTION_ID}_{i}") if isinstance(answers, dict) else None, doc, latency,
+                                        cost_share=share, request_id=doc.get("id"), model=doc.get("model")))
+            except JevError as exc:
+                out.append({"error": exc.kind})
+        return out
+
+    _ERROR_KINDS = {"timeout": "timeout", "http_error": "http", "transport_error": "transport",
+                    "invalid_response": "invalid-response", "no_probabilities": "invalid-response",
+                    "no_key": "missing-key"}
+
+    def _ask_claim_client(self, state: dict, questions: dict) -> list:
+        return self._ask_via_client(state, questions)
+
+    def _ask_via_client(self, state: dict, questions: dict) -> list:
+        try:
+            got = self.client.ask(state, questions)
+        except Exception as exc:  # noqa: BLE001 - a broken client is a fallback, never a crash
+            return [{"error": "transport", "detail": type(exc).__name__}] * len(questions)
+        out = []
+        for qid in questions:
+            a = got.get(qid)
+            raw = getattr(a, "raw", None)
+            if getattr(a, "ok", False) and isinstance(raw, dict):
+                try:
+                    out.append(self._answer(raw, None, getattr(a, "latency_s", None) or 0.0, cost_share=getattr(a, "cost_usd", None),
+                                            request_id=getattr(a, "request_id", None), model=getattr(a, "model_returned", None)))
+                    continue
+                except JevError as exc:
+                    out.append({"error": exc.kind})
+                    continue
+            err = str(getattr(a, "error", None) or "transport")
+            if err.startswith("refused_"):          # a cap or ledger refusal before the provider: counted as cap-<reason>
+                reason = err[len("refused_"):]
+                kind = reason if reason.startswith("cap-") else "cap-" + reason
+            else:
+                kind = self._ERROR_KINDS.get(err, "transport")
+            out.append({"error": kind})
+        return out
 
     # ---- the pass over one brief ------------------------------------------------------------
     def run(self, report: dict, checkable: list, windows: dict | None) -> dict:
@@ -334,7 +441,7 @@ class JevFirstPass:
         "verdict"(when by jev)}. Never raises for a Jev failure."""
         windows = windows or {}
         key = os.environ.get(self.api_key_env) or ""
-        unavailable = None if key else "missing-key"
+        unavailable = None if (key or self.client is not None) else "missing-key"
         jobs: dict = {}            # (n, citation_index) -> (claim text, window)
         plans: dict = {}           # n -> list of citation indexes asked, or a pass-up reason
         for n in checkable:
@@ -349,7 +456,19 @@ class JevFirstPass:
                 for i in resolved:
                     jobs[(n, i)] = (claim["claim"], windows[(n, i)])
         results: dict = {}
-        if jobs:
+        if jobs and self.batch:
+            def claim_job(n):
+                idx = plans[n]
+                try:
+                    got = self.ask_claim(key, report["claims"][n]["claim"], [windows[(n, i)] for i in idx])
+                except Exception as exc:  # noqa: BLE001
+                    got = [{"error": "transport", "detail": type(exc).__name__}] * len(idx)
+                return n, dict(zip(idx, got))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.pool_size) as pool:
+                for n, per in pool.map(claim_job, sorted({n for n, _ in jobs})):
+                    for i, answer in per.items():
+                        results[(n, i)] = answer
+        elif jobs:
             def one(job):
                 text, section = jobs[job]
                 try:
